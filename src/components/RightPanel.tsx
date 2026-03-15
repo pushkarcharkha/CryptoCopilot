@@ -10,7 +10,7 @@ import {
   Pie,
   Cell,
 } from 'recharts';
-import type { CryptoPrice, ChartDataPoint, RightPanelView, WalletState, TransactionPreview, SwapPreview, AppTransaction } from '../types';
+import type { CryptoPrice, ChartDataPoint, RightPanelView, WalletState, TransactionPreview, SwapPreview, AppTransaction, CoinGeckoCoin } from '../types';
 
 interface RightPanelProps {
   view: RightPanelView;
@@ -29,40 +29,114 @@ interface RightPanelProps {
   onConfirmSwapClick?: () => void;
   onSwitchNetwork?: (targetChainId: number) => Promise<void>;
   history?: AppTransaction[];
+  allCoins?: CoinGeckoCoin[];
+  watchlistCoins?: CoinGeckoCoin[];
+  onToggleWatchlist?: (coinId: string) => void;
+  isInWatchlist?: (coinId: string) => boolean;
+  watchlistLoading?: boolean;
+  watchlistLastUpdated?: number;
+  onCoinClick?: (coin: CoinGeckoCoin) => void;
+  onBackToWatchlist?: () => void;
+  activeCoin?: CoinGeckoCoin | null;
 }
 
-function formatPrice(n: number) {
+function formatPrice(n: number | null | undefined) {
+  if (n === null || n === undefined) return '$0.00';
   if (n >= 1000) return `$${n.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
   if (n >= 1) return `$${n.toFixed(2)}`;
   return `$${n.toFixed(4)}`;
 }
 
-function formatChange(n: number) {
+function formatChange(n: number | null | undefined) {
+  if (n === null || n === undefined) return '0.00%';
   return `${n >= 0 ? '+' : ''}${n.toFixed(2)}%`;
 }
 
 
 
-// Custom tooltip for chart
-const CustomTooltip = ({ active, payload }: any) => {
-  if (active && payload && payload.length) {
-    return (
-      <div
+const Sparkline = ({ data, color }: { data: number[]; color: string }) => {
+  if (!data || data.length === 0) return null;
+  const min = Math.min(...data);
+  const max = Math.max(...data);
+  const range = max - min;
+  const width = 60;
+  const height = 24;
+  
+  const points = data.map((d, i) => {
+    const x = (i / (data.length - 1)) * width;
+    const y = height - ((d - min) / (range || 1)) * height;
+    return `${x},${y}`;
+  }).join(' ');
+
+  return (
+    <svg width={width} height={height} style={{ overflow: 'visible' }}>
+      <polyline
+        fill="none"
+        stroke={color}
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        points={points}
+      />
+    </svg>
+  );
+};
+
+const TradingViewWidget = ({ symbol }: { symbol: string }) => {
+  const containerId = "tradingview_chart";
+  const [isExpanded, setIsExpanded] = React.useState(false);
+  
+  React.useEffect(() => {
+    const timer = setTimeout(() => {
+      if ((window as any).TradingView && document.getElementById(containerId)) {
+        new (window as any).TradingView.widget({
+          container_id: containerId,
+          symbol: `BINANCE:${symbol.toUpperCase()}USDT`,
+          interval: "1H",
+          timezone: "Etc/UTC",
+          theme: "dark",
+          style: "1",
+          locale: "en",
+          toolbar_bg: "#111111",
+          enable_publishing: false,
+          hide_top_toolbar: false,
+          hide_legend: false,
+          save_image: false,
+          height: isExpanded ? 600 : 400,
+          width: "100%",
+          hide_side_toolbar: false,
+          allow_symbol_change: true,
+          studies: []
+        });
+      }
+    }, 100);
+    return () => clearTimeout(timer);
+  }, [symbol, isExpanded]);
+
+  return (
+    <div style={{ position: 'relative' }}>
+      <button
+        onClick={() => setIsExpanded(!isExpanded)}
         style={{
-          background: 'rgba(26,26,46,0.95)',
-          border: '1px solid rgba(0,212,255,0.2)',
-          borderRadius: '8px',
-          padding: '8px 12px',
-          fontSize: '12px',
-          fontFamily: 'JetBrains Mono, monospace',
+          position: 'absolute',
+          top: '10px',
+          right: '10px',
+          zIndex: 10,
+          background: 'rgba(0,0,0,0.6)',
+          border: '1px solid rgba(255,255,255,0.2)',
+          color: '#fff',
+          borderRadius: '4px',
+          padding: '4px 8px',
+          fontSize: '10px',
+          cursor: 'pointer',
+          backdropFilter: 'blur(4px)'
         }}
       >
-        <div style={{ color: '#00d4ff', fontWeight: 600 }}>{formatPrice(payload[0].value)}</div>
-        <div style={{ color: 'var(--text-muted)', fontSize: '10px', marginTop: '2px' }}>{payload[0].payload.time}</div>
-      </div>
-    );
-  }
-  return null;
+        {isExpanded ? 'Shrink' : 'Expand'}
+      </button>
+      <div id={containerId} style={{ height: isExpanded ? '600px' : '400px', width: '100%', borderRadius: '12px', overflow: 'hidden' }} />
+    </div>
+  );
 };
 
 const RightPanel: React.FC<RightPanelProps> = ({
@@ -82,8 +156,19 @@ const RightPanel: React.FC<RightPanelProps> = ({
   onConfirmSwapClick,
   onSwitchNetwork,
   history = [],
+  allCoins = [],
+  watchlistCoins = [],
+  onToggleWatchlist,
+  isInWatchlist,
+  watchlistLoading,
+  watchlistLastUpdated,
+  onCoinClick,
+  onBackToWatchlist,
+  activeCoin,
 }) => {
   const [historyFilter, setHistoryFilter] = React.useState<'all' | 'send' | 'swap' | 'week' | 'month'>('all');
+  const [watchlistTab, setWatchlistTab] = React.useState<'my' | 'all'>('my');
+  const [searchQuery, setSearchQuery] = React.useState('');
 
   // Use real wallet holdings
   const holdings = wallet.isConnected ? wallet.holdings : [];
@@ -156,13 +241,20 @@ const RightPanel: React.FC<RightPanelProps> = ({
           }}
         />
         <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-          {view === 'prices' && 'Live Market'}
-          {view === 'portfolio' && 'Portfolio'}
-          {view === 'coin-chart' && `${chartCoinName || 'Coin'} Chart`}
-          {view === 'transaction' && 'Transaction'}
           {view === 'watchlist' && 'Watchlist'}
           {view === 'contacts' && 'Address Book'}
           {view === 'history' && 'Trade Journal'}
+          {view === 'coin-chart' && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <button 
+                onClick={onBackToWatchlist}
+                style={{ background: 'none', border: 'none', color: 'var(--accent-cyan)', cursor: 'pointer', padding: 0, fontSize: '14px' }}
+              >
+                ←
+              </button>
+              {activeCoin?.name || 'Chart'}
+            </div>
+          )}
         </span>
         <span style={{ marginLeft: 'auto', fontSize: '10px', color: 'var(--text-muted)', fontFamily: 'JetBrains Mono, monospace' }}>
           {new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
@@ -378,100 +470,63 @@ const RightPanel: React.FC<RightPanelProps> = ({
           </div>
         )}
 
-        {/* ===== COIN CHART VIEW ===== */}
-        {view === 'coin-chart' && (
+        {/* ===== COIN CHART VIEW (TRADINGVIEW) ===== */}
+        {view === 'coin-chart' && activeCoin && (
           <div className="panel-content fade-in">
-            <div style={{ marginBottom: '12px' }}>
-              <div style={{ fontSize: '16px', fontWeight: 700, color: '#e2e8f0' }}>{chartCoinName}</div>
-              <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>7-Day Price Chart</div>
+            <div className="glass-card" style={{ padding: '16px', marginBottom: '16px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' }}>
+                <img src={activeCoin.image} alt={activeCoin.name} style={{ width: '32px', height: '32px' }} />
+                <div>
+                  <div style={{ fontSize: '16px', fontWeight: 700, color: '#e2e8f0' }}>{activeCoin.name} ({activeCoin.symbol.toUpperCase()})</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span style={{ fontSize: '14px', fontFamily: 'JetBrains Mono, monospace', color: '#00d4ff' }}>{formatPrice(activeCoin.current_price)}</span>
+                    <span style={{ fontSize: '12px', fontWeight: 600, color: (activeCoin.price_change_percentage_24h || 0) >= 0 ? '#10b981' : '#ef4444' }}>
+                      {formatChange(activeCoin.price_change_percentage_24h)}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <TradingViewWidget symbol={activeCoin.symbol} />
             </div>
 
-            {chartLoading ? (
-              <div className="skeleton" style={{ height: '180px', borderRadius: '10px' }} />
-            ) : chartData.length ? (
-              <>
-                <div
+            <div style={{ display: 'flex', gap: '8px', marginBottom: '16px' }}>
+              {['1H', '4H', '1D', '1W'].map(tf => (
+                <button
+                  key={tf}
                   style={{
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    marginBottom: '6px',
-                    fontSize: '12px',
-                    fontFamily: 'JetBrains Mono, monospace',
+                    flex: 1,
+                    padding: '6px',
+                    borderRadius: '8px',
+                    background: tf === '1H' ? 'rgba(0, 212, 255, 0.1)' : 'rgba(255, 255, 255, 0.05)',
+                    border: `1px solid ${tf === '1H' ? 'rgba(0, 212, 255, 0.2)' : 'transparent'}`,
+                    color: tf === '1H' ? 'var(--accent-cyan)' : 'var(--text-muted)',
+                    fontSize: '11px',
+                    fontWeight: 600,
+                    cursor: 'pointer'
                   }}
                 >
-                  <span style={{ color: 'var(--text-muted)' }}>Low: {formatPrice(chartMin)}</span>
-                  <span style={{ color: chartTrend ? '#00ff88' : '#ff4466' }}>
-                    {chartTrend ? '▲' : '▼'} {chartTrend ? 'Uptrend' : 'Downtrend'}
-                  </span>
-                  <span style={{ color: 'var(--text-muted)' }}>Hi: {formatPrice(chartMax)}</span>
-                </div>
+                  {tf}
+                </button>
+              ))}
+            </div>
 
-                <div style={{ height: '180px', minHeight: '180px' }}>
-                  <ResponsiveContainer width="100%" height="100%" minHeight={180}>
-                    <AreaChart data={chartData} margin={{ top: 5, right: 0, left: 0, bottom: 0 }}>
-                      <defs>
-                        <linearGradient id="coinGrad" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor={chartTrend ? '#00ff88' : '#ff4466'} stopOpacity={0.25} />
-                          <stop offset="95%" stopColor={chartTrend ? '#00ff88' : '#ff4466'} stopOpacity={0} />
-                        </linearGradient>
-                      </defs>
-                      <XAxis
-                        dataKey="time"
-                        tick={{ fill: '#475569', fontSize: 9, fontFamily: 'JetBrains Mono' }}
-                        tickLine={false}
-                        axisLine={false}
-                        interval="preserveStartEnd"
-                      />
-                      <YAxis
-                        domain={[chartMin, chartMax]}
-                        tick={{ fill: '#475569', fontSize: 9, fontFamily: 'JetBrains Mono' }}
-                        tickLine={false}
-                        axisLine={false}
-                        tickFormatter={(v) => formatPrice(v)}
-                        width={60}
-                      />
-                      <Tooltip content={<CustomTooltip />} />
-                      <Area
-                        type="monotone"
-                        dataKey="price"
-                        stroke={chartTrend ? '#00ff88' : '#ff4466'}
-                        strokeWidth={2}
-                        fill="url(#coinGrad)"
-                        animationDuration={500}
-                      />
-                    </AreaChart>
-                  </ResponsiveContainer>
-                </div>
-
-                {/* Price stats */}
-                <div
-                  style={{
-                    marginTop: '10px',
-                    display: 'grid',
-                    gridTemplateColumns: '1fr 1fr',
-                    gap: '8px',
-                  }}
-                >
-                  {[
-                    { label: '7D High', value: formatPrice(chartMax), color: '#00ff88' },
-                    { label: '7D Low', value: formatPrice(chartMin), color: '#ff4466' },
-                    { label: 'Current', value: formatPrice(chartData[chartData.length - 1]?.price || 0), color: '#00d4ff' },
-                    { label: '7D Change', value: `${((chartData[chartData.length - 1]?.price - chartData[0]?.price) / chartData[0]?.price * 100).toFixed(2)}%`, color: chartTrend ? '#00ff88' : '#ff4466' },
-                  ].map((s) => (
-                    <div key={s.label} className="glass-card" style={{ padding: '10px' }}>
-                      <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{s.label}</div>
-                      <div style={{ fontSize: '13px', fontWeight: 700, color: s.color, fontFamily: 'JetBrains Mono, monospace' }}>
-                        {s.value}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </>
-            ) : (
-              <div style={{ color: 'var(--text-muted)', fontSize: '13px', textAlign: 'center', padding: '40px 0' }}>
-                No chart data available
-              </div>
-            )}
+            <button
+              onClick={() => onToggleWatchlist?.(activeCoin.id)}
+              style={{
+                width: '100%',
+                padding: '12px',
+                borderRadius: '10px',
+                background: isInWatchlist?.(activeCoin.id) ? 'rgba(239, 68, 68, 0.1)' : 'rgba(16, 185, 129, 0.1)',
+                border: `1px solid ${isInWatchlist?.(activeCoin.id) ? 'rgba(239, 68, 68, 0.2)' : 'rgba(16, 185, 129, 0.2)'}`,
+                color: isInWatchlist?.(activeCoin.id) ? '#ef4444' : '#10b981',
+                fontWeight: 600,
+                fontSize: '13px',
+                cursor: 'pointer'
+              }}
+            >
+              {isInWatchlist?.(activeCoin.id) ? '✕ Remove from Watchlist' : '+ Add to Watchlist'}
+            </button>
           </div>
         )}
 
@@ -611,45 +666,153 @@ const RightPanel: React.FC<RightPanelProps> = ({
 
         {/* ===== WATCHLIST VIEW ===== */}
         {view === 'watchlist' && (
-          <div className="panel-content fade-in">
-            <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '12px', display: 'flex', justifyContent: 'space-between' }}>
-              <span>Coin</span>
-              <span>Price / 24h</span>
+          <div className="panel-content fade-in" style={{ display: 'flex', flexDirection: 'column', height: '100%', padding: '0 12px 12px' }}>
+            {/* Search Bar */}
+            <div style={{ padding: '12px 0 8px', position: 'sticky', top: 0, background: 'var(--bg-panel)', zIndex: 10 }}>
+              <div className="glass-card" style={{ padding: '8px 12px', display: 'flex', alignItems: 'center', gap: '8px', borderColor: 'rgba(255,255,255,0.1)' }}>
+                <span style={{ fontSize: '14px' }}>🔍</span>
+                <input
+                  type="text"
+                  placeholder="Search coins..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    color: '#fff',
+                    fontSize: '13px',
+                    width: '100%',
+                    outline: 'none',
+                    fontFamily: 'Inter, sans-serif'
+                  }}
+                />
+              </div>
             </div>
-            {pricesLoading
-              ? [1, 2, 3, 4, 5].map((i) => (
-                  <div key={i} style={{ marginBottom: '8px' }}>
-                    <div className="skeleton" style={{ height: '52px', borderRadius: '10px' }} />
-                  </div>
+
+            {/* Tabs */}
+            <div style={{ display: 'flex', gap: '8px', marginBottom: '12px', background: 'rgba(255,255,255,0.03)', padding: '4px', borderRadius: '10px' }}>
+              <button
+                onClick={() => setWatchlistTab('my')}
+                style={{
+                  flex: 1,
+                  padding: '6px',
+                  borderRadius: '8px',
+                  fontSize: '12px',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  background: watchlistTab === 'my' ? 'rgba(0, 212, 255, 0.1)' : 'transparent',
+                  border: 'none',
+                  color: watchlistTab === 'my' ? 'var(--accent-cyan)' : 'var(--text-muted)',
+                  transition: 'all 0.2s'
+                }}
+              >
+                My Watchlist
+              </button>
+              <button
+                onClick={() => setWatchlistTab('all')}
+                style={{
+                  flex: 1,
+                  padding: '6px',
+                  borderRadius: '8px',
+                  fontSize: '12px',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  background: watchlistTab === 'all' ? 'rgba(0, 212, 255, 0.1)' : 'transparent',
+                  border: 'none',
+                  color: watchlistTab === 'all' ? 'var(--accent-cyan)' : 'var(--text-muted)',
+                  transition: 'all 0.2s'
+                }}
+              >
+                All Coins
+              </button>
+            </div>
+
+            {/* Last Updated */}
+            <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginBottom: '12px', textAlign: 'right', fontFamily: 'JetBrains Mono' }}>
+              {watchlistLastUpdated ? `Last updated: ${Math.floor((Date.now() - watchlistLastUpdated) / 1000)}s ago` : 'Refreshing...'}
+            </div>
+
+            {/* Coin List */}
+            <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              {watchlistLoading && allCoins.length === 0 ? (
+                [1, 2, 3, 4, 5, 6].map(i => (
+                  <div key={i} className="skeleton" style={{ height: '60px', borderRadius: '12px' }} />
                 ))
-              : prices.slice(0, 5).map((coin) => (
-                  <div key={coin.id} className="glass-card" style={{ padding: '10px 14px', marginBottom: '8px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                      <div
-                        className="coin-icon"
-                        style={{ width: '28px', height: '28px', background: `${coin.color}22`, color: coin.color, fontSize: '13px' }}
+              ) : (
+                (watchlistTab === 'my' ? watchlistCoins : allCoins)
+                  .filter(c => c.name.toLowerCase().includes(searchQuery.toLowerCase()) || c.symbol.toLowerCase().includes(searchQuery.toLowerCase()))
+                  .map((coin) => (
+                    <div 
+                      key={coin.id} 
+                      className="glass-card" 
+                      style={{ 
+                        padding: '12px', 
+                        cursor: 'pointer', 
+                        transition: 'all 0.2s',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '10px'
+                      }}
+                      onClick={() => onCoinClick?.(coin)}
+                      onMouseEnter={(e) => e.currentTarget.style.borderColor = 'rgba(0,212,255,0.3)'}
+                      onMouseLeave={(e) => e.currentTarget.style.borderColor = 'rgba(255,255,255,0.1)'}
+                    >
+                      <img src={coin.image} alt={coin.name} style={{ width: '28px', height: '28px' }} />
+                      
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span style={{ fontWeight: 600, fontSize: '13px', color: '#e2e8f0', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {coin.name}
+                          </span>
+                          <Sparkline 
+                            data={coin.sparkline_in_7d?.price || []} 
+                            color={(coin.price_change_percentage_24h || 0) >= 0 ? '#10b981' : '#ef4444'} 
+                          />
+                        </div>
+                        
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' }}>
+                          <span style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase' }}>
+                            {coin.symbol}
+                          </span>
+                          <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                            <span style={{ fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: '#e2e8f0' }}>
+                              {formatPrice(coin.current_price)}
+                            </span>
+                            <span style={{ fontSize: '10px', fontWeight: 600, color: (coin.price_change_percentage_24h || 0) >= 0 ? '#10b981' : '#ef4444' }}>
+                              {formatChange(coin.price_change_percentage_24h)}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onToggleWatchlist?.(coin.id);
+                        }}
+                        style={{
+                          background: isInWatchlist?.(coin.id) ? 'rgba(239, 68, 68, 0.1)' : 'rgba(0, 212, 255, 0.1)',
+                          border: 'none',
+                          borderRadius: '6px',
+                          color: isInWatchlist?.(coin.id) ? '#ef4444' : '#00d4ff',
+                          padding: '4px 8px',
+                          fontSize: '10px',
+                          fontWeight: 700,
+                          cursor: 'pointer'
+                        }}
                       >
-                        {coin.icon}
-                      </div>
-                      <div style={{ flex: 1 }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                          <span style={{ fontWeight: 600, fontSize: '13px' }}>{coin.symbol}</span>
-                          <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: '13px', color: '#e2e8f0' }}>
-                            {formatPrice(coin.price)}
-                          </span>
-                        </div>
-                        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '2px' }}>
-                          <span
-                            className={coin.change24h >= 0 ? 'positive' : 'negative'}
-                            style={{ fontSize: '11px', fontWeight: 600 }}
-                          >
-                            {formatChange(coin.change24h)}
-                          </span>
-                        </div>
-                      </div>
+                        {isInWatchlist?.(coin.id) ? '✕' : '+'}
+                      </button>
                     </div>
-                  </div>
-                ))}
+                  ))
+              )}
+              
+              {watchlistTab === 'my' && watchlistCoins.length === 0 && !watchlistLoading && (
+                <div style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--text-muted)', fontSize: '13px' }}>
+                  No coins added yet. Browse All Coins to add some.
+                </div>
+              )}
+            </div>
           </div>
         )}
 

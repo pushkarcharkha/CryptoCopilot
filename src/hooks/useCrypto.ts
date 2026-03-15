@@ -24,7 +24,7 @@ export function useCryptoPrices(coinIds: string[] = ['bitcoin', 'ethereum', 'sol
     try {
       const ids = coinIds.join(',');
       const res = await fetch(
-        `https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd&include_24hr_change=true`
+        `/api/coingecko/simple/price?ids=${ids}&vs_currencies=usd&include_24hr_change=true`
       );
       if (!res.ok) throw new Error('CoinGecko API error');
       const data = await res.json();
@@ -72,7 +72,7 @@ export function useCoinChart(coinId: string | null, days = 7) {
     const meta = COIN_META[coinId];
     if (meta) setCoinName(meta.name);
 
-    fetch(`https://api.coingecko.com/api/v3/coins/${coinId}/market_chart?vs_currency=usd&days=${days}`)
+    fetch(`/api/coingecko/coins/${coinId}/market_chart?vs_currency=usd&days=${days}`)
       .then((r) => r.json())
       .then((data) => {
         const points: ChartDataPoint[] = (data.prices || []).map(([ts, price]: [number, number]) => ({

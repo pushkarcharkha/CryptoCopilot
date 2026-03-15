@@ -13,6 +13,11 @@ TRANSACTION/SWAP PROTOCOL:
 - For SWAP: If you have FROM_TOKEN, TO_TOKEN, and AMOUNT:
   Say: "I've prepared the swap from [AMOUNT] [FROM_TOKEN] to [TO_TOKEN]. Fetching best PancakeSwap quote..."
   Append: [[ACTION:SWAP|fromToken:X|toToken:Y|amount:Z]]
+- For WATCHLIST:
+  - To add to watchlist: [[ACTION:WATCHLIST_ADD|coinId:id]]
+  - To remove from watchlist: [[ACTION:WATCHLIST_REMOVE|coinId:id]]
+  - To open a coin's chart: [[ACTION:SHOW_CHART|coinId:id]] (use the full coin id like 'bitcoin' or 'ethereum')
+  - To open the watchlist: [[ACTION:NAVIGATE|view:watchlist]]
 - Check ACTUAL WALLET HOLDINGS context before preparing any action.
 
 You help users manage their crypto portfolio, analyze markets, and detect chart patterns. Before any trade action always explain the why — sentiment, risk level, market condition. Keep responses concise and conversational. Always reason out loud before giving advice. Use markdown-style formatting with **bold** for key terms and numbers. Be friendly but professional.`;
@@ -37,7 +42,7 @@ export function useGroqChat(apiKey: string, onActionDetected?: (action: string, 
   const abortRef = useRef<AbortController | null>(null);
 
   const sendMessage = useCallback(
-    async (content: string, walletContext?: { address: string | null; holdings: PortfolioHolding[]; contacts?: Record<string, string>; history?: AppTransaction[] }) => {
+    async (content: string, walletContext?: { address: string | null; holdings: PortfolioHolding[]; contacts?: Record<string, string>; history?: AppTransaction[]; watchlist?: string[] }) => {
       if (!content.trim() || isLoading) return;
 
       const userMsg: Message = {
@@ -73,14 +78,18 @@ export function useGroqChat(apiKey: string, onActionDetected?: (action: string, 
       try {
         const coinIds = 'bitcoin,ethereum,solana,binancecoin,cardano,avalanche-2,chainlink,polkadot,tether,usd-coin';
         const priceRes = await fetch(
-          `https://api.coingecko.com/api/v3/simple/price?ids=${coinIds}&vs_currencies=usd&include_24hr_change=true&include_market_cap=true`
+          `/api/coingecko/simple/price?ids=${coinIds}&vs_currencies=usd&include_24hr_change=true&include_market_cap=true`
         );
         if (priceRes.ok) {
           const priceData = await priceRes.json();
           const p = (id: string) => {
             const d = priceData[id];
             if (!d) return 'N/A';
-            return `$${d.usd} (${d.usd_24h_change >= 0 ? '+' : ''}${d.usd_24h_change?.toFixed(2)}%)`;
+            const change = d.usd_24h_change;
+            const changeStr = (change !== null && change !== undefined) 
+              ? `${change >= 0 ? '+' : ''}${change.toFixed(2)}%`
+              : '0.00%';
+            return `$${d.usd} (${changeStr})`;
           };
           
           livePricesContext = `BTC: ${p('bitcoin')}\nETH: ${p('ethereum')}\nSOL: ${p('solana')}\nBNB: ${p('binancecoin')}\nADA: ${p('cardano')}\nAVAX: ${p('avalanche-2')}\nLINK: ${p('chainlink')}\nDOT: ${p('polkadot')}\nUSDT: ${p('tether')}\nUSDC: ${p('usd-coin')}`;
@@ -114,6 +123,12 @@ export function useGroqChat(apiKey: string, onActionDetected?: (action: string, 
           ).join('\n');
       }
 
+      // Build watchlist context
+      let watchlistStr = 'USER\'S WATCHLIST IS EMPTY.';
+      if (walletContext && walletContext.watchlist && walletContext.watchlist.length > 0) {
+        watchlistStr = `USER'S CURRENT WATCHLIST (saved IDs):\n${walletContext.watchlist.join(', ')}\nWhen user asks about their watched coins, refer to these.`;
+      }
+
       const contextualPrompt = `
 [LIVE PRICES]
 ${livePricesContext}
@@ -125,14 +140,14 @@ ${contactsStr}
 
 ${historyStr}
 
+${watchlistStr}
+
 CRITICAL RULES: 
 1. Never assume the user holds any cryptocurrency unless it explicitly appears in their ACTUAL WALLET HOLDINGS listed above. 
 2. If user asks about a coin they don't hold, give market analysis but clearly state "you don't currently hold this coin."
 3. Use ONLY the above prices and balances. ignore your training data.
-4. Use the TRANSACTION HISTORY to answer questions about past activity.
+4. Use the TRANSACTION HISTORY and WATCHLIST to answer questions about past activity or current interests.
 `;
-
-      console.log('Final Context for AI:', contextualPrompt);
 
       const reqBody = {
         model: 'llama-3.3-70b-versatile',

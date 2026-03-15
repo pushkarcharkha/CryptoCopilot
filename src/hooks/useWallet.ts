@@ -265,15 +265,16 @@ export function useWallet() {
   const formatAddress = (address: string) =>
     `${address.slice(0, 5)}...${address.slice(-4)}`;
 
-  const getExplorerUrl = useCallback((chainId: number) => {
-    switch (chainId) {
-      case 56: return 'https://bscscan.com';
-      case 137: return 'https://polygonscan.com';
-      case 11155111: return 'https://sepolia.etherscan.io';
-      case 43114: return 'https://snowtrace.io';
-      default: return 'https://etherscan.io';
-    }
-  }, []);
+  const getExplorerUrl = useCallback((hash?: string) => {
+    const network = wallet.networkName;
+    let base = 'https://etherscan.io';
+    if (network?.includes('BNB')) base = 'https://bscscan.com';
+    else if (network?.includes('Polygon')) base = 'https://polygonscan.com';
+    else if (network?.includes('Sepolia')) base = 'https://sepolia.etherscan.io';
+    else if (network?.includes('Avalanche')) base = 'https://snowtrace.io';
+    
+    return hash ? `${base}/tx/${hash}` : base;
+  }, [wallet.networkName]);
 
   return { 
     wallet, 

@@ -1,73 +1,95 @@
-# React + TypeScript + Vite
+# 🚀 CryptoCopilot - Your Agentic Web3 Companion
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+**CryptoCopilot** is a next-generation decentralized finance (DeFi) dashboard that combines the power of AI with seamless blockchain integration. Built for traders and power users, it offers an agentic chat interface to manage your assets, monitor markets, and execute trades using natural language.
 
-Currently, two official plugins are available:
+---
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## ✨ Key Features
 
-## React Compiler
+### 🤖 AI Crypto Co-pilot
+*   **Natural Language Commands**: "Buy 0.1 BNB worth of USDT", "Show me the SOL chart", or "Send 0.05 ETH to Vitalik".
+*   **Context-Aware Analysis**: The AI knows your live wallet balance, recent transactions, and current market prices.
+*   **Intelligent Routing**: Automatically detects swap intents, fetches quotes from DEXs, and prepares transactions for your approval.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+### 💼 Multi-Chain Wallet Management
+*   **Unified Dashboard**: Support for Ethereum, BNB Smart Chain, Polygon, and Sepolia Testnet.
+*   **Real-time Balances**: Instantly tracks native tokens and supported ERC-20 assets (USDT, USDC, LINK).
+*   **Contact Book**: Save frequently used addresses by name for faster, human-readable transfers.
 
-## Expanding the ESLint configuration
+### 🔄 Integrated DEX Trading (PancakeSwap)
+*   **Native Swaps**: Swap any supported tokens directly on the BNB Smart Chain using the PancakeSwap V2 Router.
+*   **Zero Fees**: No platform fees—only standard network gas and DEX provider fees apply.
+*   **Slippage Protection**: Intelligent quote management to ensure you get the best market rates.
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+### 📈 Advanced Market Monitoring
+*   **Dynamic Watchlist**: Real-time data for the top 250+ cryptocurrencies via CoinGecko.
+*   **Search & Discover**: Find any coin instantly and add it to your personal favorites.
+*   **Professional Charts**: Fully integrated TradingView charts with:
+    *   Candlestick & Line views.
+    *   **Expandable Canvas** (400px to 600px).
+    *   **Drawing Suite**: Trendlines, Fibonacci, and patterns for deep technical analysis.
+    *   7-day Sparkline overviews for quick trend detection.
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+### 📜 Transaction Intelligence
+*   **Live History**: Locally tracked history of all your sends, swaps, and receives.
+*   **Direct Explorer Links**: Click any transaction to view it live on Etherscan, BscScan, or Polygonscan.
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
+---
 
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+## 🛠️ Technology Stack
+
+*   **Frontend**: React 18 + TypeScript + Vite
+*   **Styling**: CSS Modules with Modern Glassmorphism & Dark Mode
+*   **Blockchain**: Ethers.js v6 (MetaMask / Trust Wallet / Web3 Injection)
+*   **AI Engine**: Groq LPU™ (LLaMA 3 / Mixtral) for instant responses
+*   **Data APIs**:
+    *   **CoinGecko**: Market prices and coin discovery
+    *   **TradingView**: Advanced charting library
+    *   **PancakeSwap V2**: On-chain swap routing
+
+---
+
+## 🚀 Getting Started
+
+### 1. Prerequisites
+*   [Node.js](https://nodejs.org/) (v18 or higher)
+*   [MetaMask](https://metamask.io/) browser extension
+
+### 2. Installation
+```bash
+# Clone the repository
+git clone https://github.com/yourusername/cryptocopilot.git
+
+# Navigate to project
+cd cryptocopilot
+
+# Install dependencies
+npm install
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+### 3. API Setup
+To use the AI chat features, you will need a **Groq API Key**:
+1. Get a free key at [Groq Cloud Console](https://console.groq.com/).
+2. Open the app, click the **Settings** icon (bottom left).
+3. Paste your API key. (Key is stored securely in your browser's `localStorage`).
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+### 4. Run Development Server
+```bash
+npm run dev
 ```
+
+---
+
+## 🛡️ Security & Privacy
+*   **Key Security**: Your Groq API key and Watchlist are stored strictly in your local browser storage.
+*   **Non-Custodial**: CryptoCopilot never asks for your private keys or seed phrase. All transactions are signed via your connected Web3 wallet (e.g., MetaMask).
+*   **CORS Protection**: Integrated local proxy to ensure secure data fetching from market providers.
+
+---
+
+## 📄 License
+Distributed under the MIT License. See `LICENSE` for more information.
+
+---
+
+*Designed and Built with ⚡ by Antigravity*

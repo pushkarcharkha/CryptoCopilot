@@ -6,12 +6,13 @@ import RightPanel from './components/RightPanel';
 import SignalFeed from './components/SignalFeed';
 import SettingsModal from './components/SettingsModal';
 import { useGroqChat } from './hooks/useGroqChat';
-import { useWallet, TOKEN_ADDRESSES, ERC20_ABI } from './hooks/useWallet';
-import { useCryptoPrices, useCoinChart, detectCoinInMessage } from './hooks/useCrypto';
+import { useWallet } from './hooks/useWallet';
+import { useCryptoPrices, useCoinChart } from './hooks/useCrypto';
 import { useContacts } from './hooks/useContacts';
 import { usePancakeSwap, BNB_TOKENS } from './hooks/usePancakeSwap';
 import { useTransactionHistory } from './hooks/useTransactionHistory';
-import type { RightPanelView, SidebarFeature, TraderSignal, TransactionPreview, SwapPreview } from './types';
+import { useWatchlist } from './hooks/useWatchlist';
+import type { RightPanelView, SidebarFeature, TraderSignal, TransactionPreview, SwapPreview, CoinGeckoCoin } from './types';
 import { ethers } from 'ethers';
 
 function App() {
@@ -19,9 +20,9 @@ function App() {
   const [activeTab, setActiveTab] = useState<'agent' | 'signals'>('agent');
   const [rightPanelView, setRightPanelView] = useState<RightPanelView>('prices');
   const [activeFeature, setActiveFeature] = useState<SidebarFeature | null>(null);
-  const [activeCoinId, setActiveCoinId] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [apiKey, setApiKey] = useState<string>(() => localStorage.getItem('groq_api_key') || '');
+  const [activeCoin, setActiveCoin] = useState<CoinGeckoCoin | null>(null);
   const [transactionPreview, setTransactionPreview] = useState<TransactionPreview | null>(null);
   const [swapPreview, setSwapPreview] = useState<SwapPreview | null>(null);
   
@@ -31,12 +32,11 @@ function App() {
     addSystemMessageRef.current?.(content);
   }, []);
 
-
-
   const { wallet, connectWallet, switchNetwork, refreshBalances, getExplorerUrl, formatAddress } = useWallet();
-  const { contacts, addContact, removeContact, getContact } = useContacts();
+  const { contacts, addContact, removeContact } = useContacts();
   const { history, saveTransaction } = useTransactionHistory();
   const { getSwapQuote, approveToken } = usePancakeSwap();
+  const { allCoins, watchlistCoins, watchlistIds, loading: watchlistLoading, lastUpdated: watchlistLastUpdated, toggleWatchlist, isInWatchlist } = useWatchlist();
 
   // Define action handler for the AI
   const handleAIAction = useCallback(async (action: string, params: Record<string, string>) => {
@@ -93,8 +93,38 @@ function App() {
           addSystemMessageProxy(`❌ Swap Error: ${err.message}`);
         }
       }
+    } else if (action === 'WATCHLIST_ADD') {
+      const { coinId } = params;
+      if (coinId) {
+        toggleWatchlist(coinId);
+        addSystemMessageProxy(`✅ Added **${coinId}** to your watchlist.`);
+      }
+    } else if (action === 'WATCHLIST_REMOVE') {
+      const { coinId } = params;
+      if (coinId) {
+        toggleWatchlist(coinId);
+        addSystemMessageProxy(`🗑️ Removed **${coinId}** from your watchlist.`);
+      }
+    } else if (action === 'SHOW_CHART') {
+      const { coinId } = params;
+      if (coinId) {
+        const coin = allCoins.find(c => c.id === coinId || c.symbol === coinId.toLowerCase());
+        if (coin) {
+          setActiveCoin(coin);
+          setRightPanelView('coin-chart');
+          addSystemMessageProxy(`📈 Opening **${coin.name}** chart...`);
+        } else {
+          addSystemMessageProxy(`❌ Sorry, I couldn't find a chart for **${coinId}**.`);
+        }
+      }
+    } else if (action === 'NAVIGATE') {
+      const { view } = params;
+      if (view === 'watchlist') {
+        setRightPanelView('watchlist');
+        addSystemMessageProxy(`📋 Opening your watchlist.`);
+      }
     }
-  }, [wallet.networkName, wallet.address, getSwapQuote, addSystemMessageProxy]);
+  }, [wallet.networkName, wallet.address, getSwapQuote, addSystemMessageProxy, toggleWatchlist, allCoins]);
 
   const { messages, isLoading, sendMessage, addSystemMessage, clearMessages } = useGroqChat(apiKey, handleAIAction);
   
@@ -103,7 +133,7 @@ function App() {
   }, [addSystemMessage]);
 
   const { prices, isLoading: pricesLoading } = useCryptoPrices(['bitcoin', 'ethereum', 'solana', 'cardano', 'chainlink', 'binancecoin', 'matic-network', 'avalanche-2', 'tether', 'usd-coin']);
-  const { chartData, isLoading: chartLoading, coinName: chartCoinName } = useCoinChart(activeCoinId);
+  const { chartData, isLoading: chartLoading, coinName: chartCoinName } = useCoinChart(activeCoin?.id || null);
 
   // Handle sidebar feature click → preset message + panel update
   const handleFeatureClick = useCallback(
@@ -120,11 +150,12 @@ function App() {
         addSystemMessage("Here are your saved contacts. You can add someone by saying 'add [name] [wallet address]'.");
       } else if (feature === 'watchlist') {
         setRightPanelView('watchlist');
-        sendMessage(message, { address: wallet.address, holdings: wallet.holdings, contacts, history });
+        sendMessage(message, { address: wallet.address, holdings: wallet.holdings, contacts, history, watchlist: watchlistIds });
       } else if (feature === 'chart') {
-        setActiveCoinId('bitcoin');
+        const btc = allCoins.find(c => c.symbol === 'btc') || allCoins[0];
+        if (btc) setActiveCoin(btc);
         setRightPanelView('coin-chart');
-        sendMessage(message, { address: wallet.address, holdings: wallet.holdings, contacts, history });
+        sendMessage(message, { address: wallet.address, holdings: wallet.holdings, contacts, history, watchlist: watchlistIds });
       } else if (feature === 'journal') {
         setRightPanelView('history');
         sendMessage(message, { address: wallet.address, holdings: wallet.holdings, contacts, history });
@@ -133,400 +164,237 @@ function App() {
         sendMessage(message, { address: wallet.address, holdings: wallet.holdings, contacts, history });
       }
     },
-    [sendMessage, addSystemMessage, wallet.address, wallet.holdings, contacts, history]
+    [sendMessage, addSystemMessage, wallet.address, wallet.holdings, contacts, history, watchlistIds, allCoins]
   );
 
   const handleConfirmTransaction = useCallback(async () => {
-    if (!wallet.isConnected || !window.ethereum || !transactionPreview) {
+    const preview = transactionPreview;
+    if (!wallet.isConnected || !window.ethereum || !preview) {
       addSystemMessage("Please connect your wallet first to confirm this transaction.");
       return;
     }
     
     let txHash = "";
     try {
-      addSystemMessage(`⏳ Requesting signature for **${transactionPreview.amount} ${transactionPreview.coin}**...`);
+      addSystemMessage(`⏳ Requesting signature for **${preview.amount} ${preview.coin}**...`);
       const provider = new ethers.BrowserProvider(window.ethereum);
       const signer = await provider.getSigner();
-      const network = await provider.getNetwork();
-      const chainId = Number(network.chainId);
-
-      const nativeSymbol = wallet.holdings[0]?.symbol || 'ETH';
       
-      let tx;
-      if (transactionPreview.coin.toUpperCase() === nativeSymbol.toUpperCase()) {
-        // Native transfer (ETH, BNB, MATIC, etc.)
-        tx = await signer.sendTransaction({
-          to: transactionPreview.address,
-          value: ethers.parseEther(transactionPreview.amount),
-        });
-      } else {
-        // ERC-20 transfer
-        const tokenAddress = TOKEN_ADDRESSES[chainId]?.[transactionPreview.coin.toUpperCase()];
-        
-        if (!tokenAddress) {
-          throw new Error(`Contract address for ${transactionPreview.coin} not found on this chain.`);
-        }
+      const transaction = {
+        to: preview.address,
+        value: ethers.parseEther(preview.amount)
+      };
 
-        const contract = new ethers.Contract(tokenAddress, ERC20_ABI, signer);
-        
-        // Fetch decimals for precise transfer
-        const decimals = await contract.decimals().catch(() => 18);
-        const amountWei = ethers.parseUnits(transactionPreview.amount, decimals);
-        
-        tx = await contract.transfer(transactionPreview.address, amountWei);
-      }
+      const response = await signer.sendTransaction(transaction);
+      txHash = response.hash;
       
-      txHash = tx.hash;
-
-      // Save Pending
+      addSystemMessageProxy(`📡 Transaction broadcasted! **Hash**: ${txHash.slice(0, 10)}... (Status: **Pending**)`);
+      
       saveTransaction({
         type: 'send',
-        fromToken: transactionPreview.coin,
-        fromAmount: transactionPreview.amount,
-        toAddress: transactionPreview.address,
-        contactName: transactionPreview.recipientName,
-        hash: tx.hash,
+        fromToken: preview.coin,
+        fromAmount: preview.amount,
+        toAddress: preview.address,
+        contactName: preview.recipientName,
         status: 'pending',
-        network: wallet.networkName || 'Unknown Network'
+        hash: txHash,
+        network: wallet.networkName || 'Ethereum Mainnet'
       });
 
-      addSystemMessage(`✅ Transaction sent! [View on Explorer](${getExplorerUrl(chainId)}/tx/${tx.hash})`);
+      const { amount, coin, recipientName, address: toAddress } = preview;
       setTransactionPreview(null);
       
-      // Wait for confirmation
-      await tx.wait();
+      await response.wait();
+      addSystemMessageProxy(`✅ Transaction confirmed! You sent **${amount} ${coin}** to **${recipientName}**. [View on Explorer](${getExplorerUrl(txHash)})`);
       
-      // Update to Success
       saveTransaction({
         type: 'send',
-        fromToken: transactionPreview.coin,
-        fromAmount: transactionPreview.amount,
-        toAddress: transactionPreview.address,
-        contactName: transactionPreview.recipientName,
-        hash: tx.hash,
+        fromToken: coin,
+        fromAmount: amount,
+        toAddress: toAddress,
+        contactName: recipientName,
         status: 'success',
-        network: wallet.networkName || 'Unknown Network'
+        hash: txHash,
+        network: wallet.networkName || 'Ethereum Mainnet'
       });
 
-      // Refresh balances after 2 seconds to allow chain indexing
-      setTimeout(() => { refreshBalances(); }, 2000);
-      
+      refreshBalances();
+
     } catch (err: any) {
-      addSystemMessage(`❌ Transaction failed or rejected: ${err.message}`);
-      if (txHash && transactionPreview) {
+      console.error('Transaction Error:', err);
+      addSystemMessage(`❌ Error: ${err.message || 'Transaction failed'}`);
+      
+      if (txHash && preview) {
         saveTransaction({
           type: 'send',
-          fromToken: transactionPreview.coin,
-          fromAmount: transactionPreview.amount,
-          toAddress: transactionPreview.address,
-          contactName: transactionPreview.recipientName,
-          hash: txHash,
+          fromToken: preview.coin,
+          fromAmount: preview.amount,
+          toAddress: preview.address,
+          contactName: preview.recipientName,
           status: 'failed',
-          network: wallet.networkName || 'Unknown Network'
+          hash: txHash,
+          network: wallet.networkName || 'Ethereum Mainnet'
         });
       }
     }
-  }, [wallet.isConnected, transactionPreview, addSystemMessage, wallet.holdings, wallet.networkName, refreshBalances, getExplorerUrl, saveTransaction]);
+  }, [wallet.isConnected, wallet.networkName, transactionPreview, addSystemMessage, addSystemMessageProxy, getExplorerUrl, refreshBalances, saveTransaction]);
 
   const handleConfirmSwap = useCallback(async () => {
-    if (!wallet.isConnected || !window.ethereum || !swapPreview) return;
-    let txHash = "";
+    if (!wallet.isConnected || !window.ethereum || !swapPreview) {
+      addSystemMessageProxy("Please connect your wallet first.");
+      return;
+    }
+
     try {
-      addSystemMessageProxy(`⏳ Processing swap: **${swapPreview.fromAmount} ${swapPreview.fromToken}** → **${swapPreview.toToken}**...`);
-      
+      addSystemMessageProxy(`⏳ Preparing swap of **${swapPreview.fromAmount} ${swapPreview.fromToken}** for **${swapPreview.toToken}**...`);
       const provider = new ethers.BrowserProvider(window.ethereum);
       const signer = await provider.getSigner();
-      
-      // PancakeSwap Router ABI
+
+      // Check for ETH (native)
+      const isFromEth = swapPreview.fromToken === 'BNB'; 
+      const isToEth = swapPreview.toToken === 'BNB';
+
+      let tx: any;
+      const PANCAKESWAP_ROUTER = "0x10ED43C718714eb63d5aA57B78B54704E256024E";
       const ROUTER_ABI = [
         "function swapExactETHForTokens(uint amountOutMin, address[] calldata path, address to, uint deadline) external payable returns (uint[] memory amounts)",
         "function swapExactTokensForETH(uint amountIn, uint amountOutMin, address[] calldata path, address to, uint deadline) external returns (uint[] memory amounts)",
         "function swapExactTokensForTokens(uint amountIn, uint amountOutMin, address[] calldata path, address to, uint deadline) external returns (uint[] memory amounts)"
       ];
-      const PANCAKESWAP_ROUTER = "0x10ED43C718714eb63d5aA57B78B54704E256024E";
-      const WBNB = "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c";
-      
+
       const router = new ethers.Contract(PANCAKESWAP_ROUTER, ROUTER_ABI, signer);
-      
       const deadline = Math.floor(Date.now() / 1000) + 60 * 20; // 20 mins
-      const amountIn = BigInt(swapPreview.rawSwapData.amountWei);
-      const amountOutMin = BigInt(swapPreview.rawSwapData.estimatedOutputWei) * BigInt(99) / BigInt(100); // 1% slippage
-      
-      let tx;
+      const path = [swapPreview.fromTokenAddress, swapPreview.toTokenAddress];
+      const amountIn = swapPreview.rawSwapData.amountWei;
+      const minAmountOut = 0; // In production, use slippage
 
-      // 1. Check Approval for ERC20
-      const BNB_ADDR = "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE";
-      if (swapPreview.fromTokenAddress.toLowerCase() !== BNB_ADDR.toLowerCase()) {
-        addSystemMessageProxy("🔓 Approving tokens...");
-        await approveToken(swapPreview.fromTokenAddress, amountIn.toString());
+      if (!isFromEth) {
+        addSystemMessageProxy(`🔐 Checking allowance for **${swapPreview.fromToken}**...`);
+        await approveToken(swapPreview.fromTokenAddress, amountIn);
+        addSystemMessageProxy(`✅ Token approved! Please sign the swap transaction...`);
       }
 
-      addSystemMessageProxy("🚀 Executing swap on PancakeSwap...");
-      
-      if (swapPreview.fromTokenAddress.toLowerCase() === BNB_ADDR.toLowerCase()) {
-        // BNB → Token
-        tx = await router.swapExactETHForTokens(
-          amountOutMin,
-          [WBNB, swapPreview.toTokenAddress],
-          wallet.address,
-          deadline,
-          { value: amountIn }
-        );
-      } else if (swapPreview.toTokenAddress.toLowerCase() === BNB_ADDR.toLowerCase()) {
-        // Token → BNB
-        tx = await router.swapExactTokensForETH(
-          amountIn,
-          amountOutMin,
-          [swapPreview.fromTokenAddress, WBNB],
-          wallet.address,
-          deadline
-        );
+      if (isFromEth) {
+        tx = await router.swapExactETHForTokens(minAmountOut, path, wallet.address, deadline, { value: amountIn });
+      } else if (isToEth) {
+        tx = await router.swapExactTokensForETH(amountIn, minAmountOut, path, wallet.address, deadline);
       } else {
-        // Token → Token
-        tx = await router.swapExactTokensForTokens(
-          amountIn,
-          amountOutMin,
-          [swapPreview.fromTokenAddress, WBNB, swapPreview.toTokenAddress],
-          wallet.address,
-          deadline
-        );
+        tx = await router.swapExactTokensForTokens(amountIn, minAmountOut, path, wallet.address, deadline);
       }
 
-      txHash = tx.hash;
+      const txHash = tx.hash;
+      addSystemMessageProxy(`📡 Swap broadcasted! **Hash**: ${txHash.slice(0, 10)}... (Status: **Pending**)`);
 
-      // Save Pending
       saveTransaction({
         type: 'swap',
         fromToken: swapPreview.fromToken,
-        toToken: swapPreview.toToken,
         fromAmount: swapPreview.fromAmount,
+        toToken: swapPreview.toToken,
         toAmount: swapPreview.toAmount,
-        hash: tx.hash,
         status: 'pending',
+        hash: txHash,
         network: 'BNB Smart Chain'
       });
 
-      addSystemMessageProxy(`✅ Swap submitted! [View on Explorer](${getExplorerUrl(56)}/tx/${tx.hash})`);
-      setSwapPreview(null);
-      setRightPanelView('portfolio');
-
-      // Wait for confirmation
       await tx.wait();
-
-      // Update to Success
+      addSystemMessageProxy(`✅ Swap successful! You received **${parseFloat(swapPreview.toAmount).toFixed(4)} ${swapPreview.toToken}**. [View on Explorer](${getExplorerUrl(txHash)})`);
+      
       saveTransaction({
         type: 'swap',
         fromToken: swapPreview.fromToken,
-        toToken: swapPreview.toToken,
         fromAmount: swapPreview.fromAmount,
+        toToken: swapPreview.toToken,
         toAmount: swapPreview.toAmount,
-        hash: tx.hash,
         status: 'success',
+        hash: txHash,
         network: 'BNB Smart Chain'
       });
 
-      setTimeout(() => { refreshBalances(); }, 2000);
+      setSwapPreview(null);
+      setRightPanelView('history');
+      refreshBalances();
+
     } catch (err: any) {
+      console.error('Swap Error:', err);
       addSystemMessageProxy(`❌ Swap failed: ${err.message}`);
-      if (txHash && swapPreview) {
-        saveTransaction({
-          type: 'swap',
-          fromToken: swapPreview.fromToken,
-          toToken: swapPreview.toToken,
-          fromAmount: swapPreview.fromAmount,
-          toAmount: swapPreview.toAmount,
-          hash: txHash,
-          status: 'failed',
-          network: 'BNB Smart Chain'
-        });
-      }
+      
+      saveTransaction({
+        type: 'swap',
+        fromToken: swapPreview?.fromToken || '?',
+        fromAmount: swapPreview?.fromAmount || '0',
+        toToken: swapPreview?.toToken || '?',
+        toAmount: swapPreview?.toAmount || '0',
+        status: 'failed',
+        hash: '',
+        network: 'BNB Smart Chain'
+      });
     }
   }, [wallet.isConnected, wallet.address, swapPreview, addSystemMessageProxy, approveToken, getExplorerUrl, refreshBalances, saveTransaction]);
 
-  // Detect coin mentioned in messages → update right panel
   const handleSendMessage = useCallback(
     (content: string) => {
-      const lowerContent = content.toLowerCase();
-
-      // Interceptor: Adding contact
-      const addContactMatch = content.match(/(?:add|save|remember)\s+([a-zA-Z0-9_-]+)(?:'s address as|\s+as)?\s+(0x[a-fA-F0-9]{40})/i);
-      if (addContactMatch) {
-        const name = addContactMatch[1];
-        const address = addContactMatch[2];
-        addContact(name, address);
-        addSystemMessage(`Got it. Saved ${name} as ${address}. You can now send funds to ${name} directly by name.`);
-        setRightPanelView('contacts');
-        return;
-      }
-
-      // Interceptor: Viewing contacts
-      if (/(?:show my contacts|who have i saved|show address book)/i.test(content)) {
-        setRightPanelView('contacts');
-        const names = Object.keys(contacts);
-        if (names.length) {
-          addSystemMessage(`Here are your saved contacts: ${names.join(', ')}.`);
-        } else {
-          addSystemMessage("You don't have any contacts saved yet. You can add someone by saying 'add [name] [wallet address]'.");
-        }
-        return;
-      }
-
-      // Interceptor: Removing contact
-      const removeContactMatch = content.match(/(?:remove|delete)\s+([a-zA-Z0-9_-]+)(?:\s+from\s+contacts)?/i);
-      if (removeContactMatch) {
-        const name = removeContactMatch[1];
-        if (getContact(name)) {
-          removeContact(name);
-          addSystemMessage(`Removed ${name} from your contacts.`);
-        } else {
-          addSystemMessage(`I couldn't find ${name} in your contacts.`);
-        }
-        setRightPanelView('contacts');
-        return;
-      }
-
-      // Interceptor: Sending funds (FIX 3: Balance Checks)
-      const sendMatch = content.match(/(?:send|transfer)\s+([0-9.]+)\s*(?:([a-zA-Z]+)\s+)?to\s+([a-zA-Z0-9_-]+)/i);
-      if (sendMatch) {
-        if (!wallet.isConnected) {
-          addSystemMessage("Please connect your wallet first to perform transactions.");
+      // Intercept contacts commands
+      if (content.toLowerCase().startsWith('add ') && content.split(' ').length >= 3) {
+        const parts = content.split(' ');
+        const name = parts[1];
+        const addr = parts[2];
+        if (ethers.isAddress(addr)) {
+          addContact(name, addr);
+          addSystemMessage(`✅ Saved **${name}** as ${addr.slice(0, 6)}...${addr.slice(-4)}. You can now send funds to ${name} directly by name.`);
+          setRightPanelView('contacts');
           return;
         }
+      }
 
-        const amount = parseFloat(sendMatch[1]);
-        const nativeSymbol = wallet.holdings[0]?.symbol || 'ETH';
-        const coinSymbol = (sendMatch[2] || nativeSymbol).toUpperCase();
-        const name = sendMatch[3];
-        const address = getContact(name);
-
-        if (address) {
-          // Find holding
-          const holding = wallet.holdings.find(h => h.symbol.toUpperCase() === coinSymbol);
-
-          // Check 1: Do they hold the coin?
-          if (!holding || holding.amount <= 0) {
-            addSystemMessage(`❌ You don't have any **${coinSymbol}** in your wallet. You can't send what you don't have.`);
-            return;
-          }
-
-          // Check 2: Insufficient balance?
-          if (amount > holding.amount) {
-            addSystemMessage(`❌ You only have **${holding.amount.toFixed(4)} ${coinSymbol}** in your wallet. You can't send **${amount} ${coinSymbol}**.`);
-            return;
-          }
-
-          // Check 3: Gas fee check (estimate ~$2.40 or roughly 0.001 ETH)
-          const nativeSymbol = wallet.holdings[0]?.symbol || 'ETH';
-          const nativeHolding = wallet.holdings.find(h => h.symbol === nativeSymbol);
-          const minGasBuffer = 0.002; // Safety buffer
-          
-          if (coinSymbol === nativeSymbol) {
-            if (amount + minGasBuffer > (nativeHolding?.amount || 0)) {
-              addSystemMessage(`❌ You have enough ${nativeSymbol}, but you need a bit more to cover gas fees. Try sending a slightly smaller amount.`);
-              return;
-            }
-          } else {
-            if ((nativeHolding?.amount || 0) < minGasBuffer) {
-              addSystemMessage(`❌ You have enough ${coinSymbol} but your ${nativeSymbol} balance is too low to cover gas fees. Add some ${nativeSymbol} first.`);
-              return;
-            }
-          }
-
-          const gasMap: Record<string, string> = {
-            'BNB Smart Chain': '< $0.05',
-            'Polygon Mainnet': '< $0.05',
-            'Ethereum Mainnet': '$2 - $10'
-          };
-          const estGas = gasMap[wallet.networkName || ''] || 'Low';
-
-          setTransactionPreview({
-            recipientName: name,
-            address,
-            amount: amount.toString(),
-            coin: coinSymbol,
-            estimatedGas: estGas,
-            networkName: wallet.networkName || 'Unknown Network'
-          });
-          setRightPanelView('transaction');
-          addSystemMessage(`✅ Balance verification passed! Found ${name} at ${address}. You're about to send ${amount} ${coinSymbol}. Confirm?`);
-        } else {
-          addSystemMessage(`I don't have ${name}'s address saved. Reply with their wallet address and I'll save it.`);
+      if (content.toLowerCase().startsWith('delete contact ')) {
+        const name = content.replace(/delete contact /i, '').trim();
+        if (contacts[name]) {
+          removeContact(name);
+          addSystemMessage(`🗑️ Removed **${name}** from your address book.`);
+          setRightPanelView('contacts');
+          return;
         }
-        return;
       }
 
-      // Interceptor: Confirm transaction
-      const confirmMatch = content.match(/^(?:confirm|yes|do it|send it|y)$/i);
-      if (confirmMatch && rightPanelView === 'transaction' && transactionPreview) {
-        handleConfirmTransaction();
-        return;
-      }
-
-      // Default contextual panel updates
-      const coinId = detectCoinInMessage(content);
-      if (coinId) {
-        setActiveCoinId(coinId);
-        setRightPanelView('coin-chart');
-      } else if (lowerContent.includes('portfolio') || lowerContent.includes('holding')) {
-        setRightPanelView('portfolio');
-      } else if (lowerContent.includes('watchlist') || lowerContent.includes('watch')) {
-        setRightPanelView('watchlist');
-      }
-
-      // Interceptor: Confirm swap
-      const confirmSwapMatch = content.match(/^(?:confirm swap|yes swap|swap now)$/i);
-      if (confirmSwapMatch && rightPanelView === 'swap' && swapPreview) {
-        handleConfirmSwap();
-        return;
-      }
-
-      // Interceptor: View history
-      if (/(?:show my history|what did i do recently|show transactions|what did i send last week|trade journal)/i.test(content)) {
-        setRightPanelView('history');
-        sendMessage(content, { address: wallet.address, holdings: wallet.holdings, contacts, history });
-        return;
-      }
-
-      sendMessage(content, { address: wallet.address, holdings: wallet.holdings, contacts, history });
+      // Default AI message
+      sendMessage(content, { 
+        address: wallet.address, 
+        holdings: wallet.holdings, 
+        contacts, 
+        history, 
+        watchlist: watchlistIds 
+      });
     },
-    [sendMessage, addContact, contacts, getContact, removeContact, addSystemMessage, rightPanelView, transactionPreview, handleConfirmTransaction, wallet, history]
+    [sendMessage, addContact, removeContact, contacts, wallet.address, wallet.holdings, history, watchlistIds]
   );
 
-  // Wallet connection
-  const handleConnectWallet = useCallback(async () => {
-    if (wallet.isConnected) return;
-    const result = await connectWallet();
-    if (result) {
+  const handleConnectWallet = useCallback(() => {
+    if (!wallet.isConnected) {
+      connectWallet();
+    } else {
       setRightPanelView('portfolio');
-      
-      // Calculate total USD value
-      const totalValue = result.holdings.reduce((sum: number, h: any) => {
-        const coinPrice = prices.find((p: any) => p.symbol.toLowerCase() === h.symbol.toLowerCase());
-        return sum + (coinPrice ? h.amount * coinPrice.price : 0);
-      }, 0);
-
-      addSystemMessage(
-        `✅ Connected! Your wallet (**${result.address.slice(0, 6)}...${result.address.slice(-4)}**) is ready. Your combined portfolio balance is **$${totalValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}** on **${result.networkName}**.`
-      );
     }
-  }, [wallet.isConnected, connectWallet, addSystemMessage, prices]);
+  }, [wallet.isConnected, connectWallet]);
 
-  // Signal feed → AI analysis
-  const handleSignalClick = useCallback(
-    (signal: TraderSignal) => {
-      setActiveTab('agent');
-      const msg = `Analyze this ${signal.coin} signal from trader "${signal.name}" and tell me if it fits my portfolio and risk level:\n\n${signal.signal}\n\nEntry: $${signal.entry}, Target: $${signal.tp}. Their win rate is ${signal.winRate}% over ${signal.totalSignals} signals.`;
-      sendMessage(msg, { address: wallet.address, holdings: wallet.holdings, contacts });
-    },
-    [sendMessage, wallet.address, wallet.holdings, contacts]
-  );
+  const handleSaveSettings = (newKey: string) => {
+    setApiKey(newKey);
+    localStorage.setItem('groq_api_key', newKey);
+    if (newKey) {
+      addSystemMessageProxy('✅ API Key saved! I am now ready to chat.');
+      addSystemMessageProxy('How can I help you with your crypto journey today?');
+    }
+  };
 
-  // Save Settings
-  const handleSaveSettings = useCallback((groqKey: string) => {
-    setApiKey(groqKey);
-    localStorage.setItem('groq_api_key', groqKey);
-    addSystemMessageProxy("✅ Settings saved successfully.");
-  }, [addSystemMessageProxy]);
+  const handleSignalClick = (signal: TraderSignal) => {
+    setActiveTab('agent');
+    sendMessage(`Analyze the ${signal.coin} ${signal.direction} signal from ${signal.name}. Is it a good entry?`, { 
+      address: wallet.address, 
+      holdings: wallet.holdings, 
+      contacts, 
+      history, 
+      watchlist: watchlistIds 
+    });
+  };
 
   return (
     <div
@@ -534,18 +402,18 @@ function App() {
         height: '100vh',
         display: 'flex',
         flexDirection: 'column',
-        background: 'var(--bg-primary)',
+        background: 'var(--bg-main)',
+        color: 'var(--text-main)',
         overflow: 'hidden',
       }}
     >
-      {/* Top Bar */}
       <TopBar
-        activeTab={activeTab}
-        onTabChange={setActiveTab}
         wallet={wallet}
         prices={prices}
         onConnectWallet={handleConnectWallet}
         formatAddress={formatAddress}
+        activeTab={activeTab}
+        onTabChange={setActiveTab}
       />
 
       {/* Main Layout */}
@@ -589,6 +457,18 @@ function App() {
           swapPreview={swapPreview}
           history={history}
           onSwitchNetwork={switchNetwork}
+          allCoins={allCoins}
+          watchlistCoins={watchlistCoins}
+          onToggleWatchlist={toggleWatchlist}
+          isInWatchlist={isInWatchlist}
+          watchlistLoading={watchlistLoading}
+          watchlistLastUpdated={watchlistLastUpdated}
+          onCoinClick={(coin) => {
+            setActiveCoin(coin);
+            setRightPanelView('coin-chart');
+          }}
+          onBackToWatchlist={() => setRightPanelView('watchlist')}
+          activeCoin={activeCoin}
         />
       </div>
 
