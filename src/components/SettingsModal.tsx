@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 
 interface SettingsModalProps {
   apiKey: string;
-  onSave: (key: string) => void;
+  onSave: (groqKey: string) => void;
   onClose: () => void;
 }
 

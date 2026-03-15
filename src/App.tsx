@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import Sidebar from './components/Sidebar';
 import TopBar from './components/TopBar';
 import ChatPanel from './components/ChatPanel';
@@ -9,7 +9,9 @@ import { useGroqChat } from './hooks/useGroqChat';
 import { useWallet, TOKEN_ADDRESSES, ERC20_ABI } from './hooks/useWallet';
 import { useCryptoPrices, useCoinChart, detectCoinInMessage } from './hooks/useCrypto';
 import { useContacts } from './hooks/useContacts';
-import type { RightPanelView, SidebarFeature, TraderSignal, TransactionPreview } from './types';
+import { usePancakeSwap, BNB_TOKENS } from './hooks/usePancakeSwap';
+import { useTransactionHistory } from './hooks/useTransactionHistory';
+import type { RightPanelView, SidebarFeature, TraderSignal, TransactionPreview, SwapPreview } from './types';
 import { ethers } from 'ethers';
 
 function App() {
@@ -21,12 +23,23 @@ function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [apiKey, setApiKey] = useState<string>(() => localStorage.getItem('groq_api_key') || '');
   const [transactionPreview, setTransactionPreview] = useState<TransactionPreview | null>(null);
+  const [swapPreview, setSwapPreview] = useState<SwapPreview | null>(null);
+  
+  // Use ref to break circular dependency with useGroqChat
+  const addSystemMessageRef = useRef<((content: string) => void) | null>(null);
+  const addSystemMessageProxy = useCallback((content: string) => {
+    addSystemMessageRef.current?.(content);
+  }, []);
+
+
 
   const { wallet, connectWallet, switchNetwork, refreshBalances, getExplorerUrl, formatAddress } = useWallet();
   const { contacts, addContact, removeContact, getContact } = useContacts();
+  const { history, saveTransaction } = useTransactionHistory();
+  const { getSwapQuote, approveToken } = usePancakeSwap();
 
   // Define action handler for the AI
-  const handleAIAction = useCallback((action: string, params: Record<string, string>) => {
+  const handleAIAction = useCallback(async (action: string, params: Record<string, string>) => {
     if (action === 'SEND') {
       const { amount, coin, address, name } = params;
       if (amount && coin && address && name) {
@@ -47,10 +60,48 @@ function App() {
         });
         setRightPanelView('transaction');
       }
+    } else if (action === 'SWAP') {
+      const { fromToken, toToken, amount } = params;
+      if (fromToken && toToken && amount && wallet.address) {
+        try {
+          const fromAddr = BNB_TOKENS[fromToken.toUpperCase()] || fromToken;
+          const toAddr = BNB_TOKENS[toToken.toUpperCase()] || toToken;
+          
+          addSystemMessageProxy(`🔍 Fetching PancakeSwap quote for **${amount} ${fromToken}**...`);
+
+          const decimals = 18; 
+          const amountWei = ethers.parseUnits(amount, decimals).toString();
+
+          const estimatedOutputWei = await getSwapQuote(fromAddr, toAddr, amountWei);
+          const estimatedOutput = ethers.formatUnits(estimatedOutputWei, decimals);
+          
+          setSwapPreview({
+            fromToken: fromToken.toUpperCase(),
+            fromTokenAddress: fromAddr,
+            fromAmount: amount,
+            toToken: toToken.toUpperCase(),
+            toTokenAddress: toAddr,
+            toAmount: estimatedOutput,
+            rate: `1 ${fromToken.toUpperCase()} = ${(parseFloat(estimatedOutput) / parseFloat(amount)).toFixed(6)} ${toToken.toUpperCase()}`,
+            estimatedGas: `< $0.15`, 
+            slippage: 1,
+            rawSwapData: { amountWei, estimatedOutputWei: estimatedOutputWei.toString() }
+          });
+          setRightPanelView('swap');
+          addSystemMessageProxy(`✅ Quote received! You'll get approx **${parseFloat(estimatedOutput).toFixed(4)} ${toToken.toUpperCase()}**. Review and confirm on the right.`);
+        } catch (err: any) {
+          addSystemMessageProxy(`❌ Swap Error: ${err.message}`);
+        }
+      }
     }
-  }, [wallet.networkName]);
+  }, [wallet.networkName, wallet.address, getSwapQuote, addSystemMessageProxy]);
 
   const { messages, isLoading, sendMessage, addSystemMessage, clearMessages } = useGroqChat(apiKey, handleAIAction);
+  
+  useEffect(() => {
+    addSystemMessageRef.current = addSystemMessage;
+  }, [addSystemMessage]);
+
   const { prices, isLoading: pricesLoading } = useCryptoPrices(['bitcoin', 'ethereum', 'solana', 'cardano', 'chainlink', 'binancecoin', 'matic-network', 'avalanche-2', 'tether', 'usd-coin']);
   const { chartData, isLoading: chartLoading, coinName: chartCoinName } = useCoinChart(activeCoinId);
 
@@ -63,23 +114,26 @@ function App() {
       // Update right panel based on feature
       if (feature === 'portfolio') {
         setRightPanelView('portfolio');
-        sendMessage(message, { address: wallet.address, holdings: wallet.holdings, contacts });
+        sendMessage(message, { address: wallet.address, holdings: wallet.holdings, contacts, history });
       } else if (feature === 'wallet') {
         setRightPanelView('contacts');
         addSystemMessage("Here are your saved contacts. You can add someone by saying 'add [name] [wallet address]'.");
       } else if (feature === 'watchlist') {
         setRightPanelView('watchlist');
-        sendMessage(message, { address: wallet.address, holdings: wallet.holdings, contacts });
+        sendMessage(message, { address: wallet.address, holdings: wallet.holdings, contacts, history });
       } else if (feature === 'chart') {
         setActiveCoinId('bitcoin');
         setRightPanelView('coin-chart');
-        sendMessage(message, { address: wallet.address, holdings: wallet.holdings, contacts });
+        sendMessage(message, { address: wallet.address, holdings: wallet.holdings, contacts, history });
+      } else if (feature === 'journal') {
+        setRightPanelView('history');
+        sendMessage(message, { address: wallet.address, holdings: wallet.holdings, contacts, history });
       } else {
         setRightPanelView('prices');
-        sendMessage(message, { address: wallet.address, holdings: wallet.holdings, contacts });
+        sendMessage(message, { address: wallet.address, holdings: wallet.holdings, contacts, history });
       }
     },
-    [sendMessage, addSystemMessage, wallet.address, wallet.holdings, contacts]
+    [sendMessage, addSystemMessage, wallet.address, wallet.holdings, contacts, history]
   );
 
   const handleConfirmTransaction = useCallback(async () => {
@@ -87,6 +141,8 @@ function App() {
       addSystemMessage("Please connect your wallet first to confirm this transaction.");
       return;
     }
+    
+    let txHash = "";
     try {
       addSystemMessage(`⏳ Requesting signature for **${transactionPreview.amount} ${transactionPreview.coin}**...`);
       const provider = new ethers.BrowserProvider(window.ethereum);
@@ -120,16 +176,172 @@ function App() {
         tx = await contract.transfer(transactionPreview.address, amountWei);
       }
       
+      txHash = tx.hash;
+
+      // Save Pending
+      saveTransaction({
+        type: 'send',
+        fromToken: transactionPreview.coin,
+        fromAmount: transactionPreview.amount,
+        toAddress: transactionPreview.address,
+        contactName: transactionPreview.recipientName,
+        hash: tx.hash,
+        status: 'pending',
+        network: wallet.networkName || 'Unknown Network'
+      });
+
       addSystemMessage(`✅ Transaction sent! [View on Explorer](${getExplorerUrl(chainId)}/tx/${tx.hash})`);
       setTransactionPreview(null);
       
+      // Wait for confirmation
+      await tx.wait();
+      
+      // Update to Success
+      saveTransaction({
+        type: 'send',
+        fromToken: transactionPreview.coin,
+        fromAmount: transactionPreview.amount,
+        toAddress: transactionPreview.address,
+        contactName: transactionPreview.recipientName,
+        hash: tx.hash,
+        status: 'success',
+        network: wallet.networkName || 'Unknown Network'
+      });
+
       // Refresh balances after 2 seconds to allow chain indexing
       setTimeout(() => { refreshBalances(); }, 2000);
       
     } catch (err: any) {
       addSystemMessage(`❌ Transaction failed or rejected: ${err.message}`);
+      if (txHash && transactionPreview) {
+        saveTransaction({
+          type: 'send',
+          fromToken: transactionPreview.coin,
+          fromAmount: transactionPreview.amount,
+          toAddress: transactionPreview.address,
+          contactName: transactionPreview.recipientName,
+          hash: txHash,
+          status: 'failed',
+          network: wallet.networkName || 'Unknown Network'
+        });
+      }
     }
-  }, [wallet.isConnected, transactionPreview, addSystemMessage, wallet.holdings, wallet.networkName, refreshBalances, getExplorerUrl]);
+  }, [wallet.isConnected, transactionPreview, addSystemMessage, wallet.holdings, wallet.networkName, refreshBalances, getExplorerUrl, saveTransaction]);
+
+  const handleConfirmSwap = useCallback(async () => {
+    if (!wallet.isConnected || !window.ethereum || !swapPreview) return;
+    let txHash = "";
+    try {
+      addSystemMessageProxy(`⏳ Processing swap: **${swapPreview.fromAmount} ${swapPreview.fromToken}** → **${swapPreview.toToken}**...`);
+      
+      const provider = new ethers.BrowserProvider(window.ethereum);
+      const signer = await provider.getSigner();
+      
+      // PancakeSwap Router ABI
+      const ROUTER_ABI = [
+        "function swapExactETHForTokens(uint amountOutMin, address[] calldata path, address to, uint deadline) external payable returns (uint[] memory amounts)",
+        "function swapExactTokensForETH(uint amountIn, uint amountOutMin, address[] calldata path, address to, uint deadline) external returns (uint[] memory amounts)",
+        "function swapExactTokensForTokens(uint amountIn, uint amountOutMin, address[] calldata path, address to, uint deadline) external returns (uint[] memory amounts)"
+      ];
+      const PANCAKESWAP_ROUTER = "0x10ED43C718714eb63d5aA57B78B54704E256024E";
+      const WBNB = "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c";
+      
+      const router = new ethers.Contract(PANCAKESWAP_ROUTER, ROUTER_ABI, signer);
+      
+      const deadline = Math.floor(Date.now() / 1000) + 60 * 20; // 20 mins
+      const amountIn = BigInt(swapPreview.rawSwapData.amountWei);
+      const amountOutMin = BigInt(swapPreview.rawSwapData.estimatedOutputWei) * BigInt(99) / BigInt(100); // 1% slippage
+      
+      let tx;
+
+      // 1. Check Approval for ERC20
+      const BNB_ADDR = "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE";
+      if (swapPreview.fromTokenAddress.toLowerCase() !== BNB_ADDR.toLowerCase()) {
+        addSystemMessageProxy("🔓 Approving tokens...");
+        await approveToken(swapPreview.fromTokenAddress, amountIn.toString());
+      }
+
+      addSystemMessageProxy("🚀 Executing swap on PancakeSwap...");
+      
+      if (swapPreview.fromTokenAddress.toLowerCase() === BNB_ADDR.toLowerCase()) {
+        // BNB → Token
+        tx = await router.swapExactETHForTokens(
+          amountOutMin,
+          [WBNB, swapPreview.toTokenAddress],
+          wallet.address,
+          deadline,
+          { value: amountIn }
+        );
+      } else if (swapPreview.toTokenAddress.toLowerCase() === BNB_ADDR.toLowerCase()) {
+        // Token → BNB
+        tx = await router.swapExactTokensForETH(
+          amountIn,
+          amountOutMin,
+          [swapPreview.fromTokenAddress, WBNB],
+          wallet.address,
+          deadline
+        );
+      } else {
+        // Token → Token
+        tx = await router.swapExactTokensForTokens(
+          amountIn,
+          amountOutMin,
+          [swapPreview.fromTokenAddress, WBNB, swapPreview.toTokenAddress],
+          wallet.address,
+          deadline
+        );
+      }
+
+      txHash = tx.hash;
+
+      // Save Pending
+      saveTransaction({
+        type: 'swap',
+        fromToken: swapPreview.fromToken,
+        toToken: swapPreview.toToken,
+        fromAmount: swapPreview.fromAmount,
+        toAmount: swapPreview.toAmount,
+        hash: tx.hash,
+        status: 'pending',
+        network: 'BNB Smart Chain'
+      });
+
+      addSystemMessageProxy(`✅ Swap submitted! [View on Explorer](${getExplorerUrl(56)}/tx/${tx.hash})`);
+      setSwapPreview(null);
+      setRightPanelView('portfolio');
+
+      // Wait for confirmation
+      await tx.wait();
+
+      // Update to Success
+      saveTransaction({
+        type: 'swap',
+        fromToken: swapPreview.fromToken,
+        toToken: swapPreview.toToken,
+        fromAmount: swapPreview.fromAmount,
+        toAmount: swapPreview.toAmount,
+        hash: tx.hash,
+        status: 'success',
+        network: 'BNB Smart Chain'
+      });
+
+      setTimeout(() => { refreshBalances(); }, 2000);
+    } catch (err: any) {
+      addSystemMessageProxy(`❌ Swap failed: ${err.message}`);
+      if (txHash && swapPreview) {
+        saveTransaction({
+          type: 'swap',
+          fromToken: swapPreview.fromToken,
+          toToken: swapPreview.toToken,
+          fromAmount: swapPreview.fromAmount,
+          toAmount: swapPreview.toAmount,
+          hash: txHash,
+          status: 'failed',
+          network: 'BNB Smart Chain'
+        });
+      }
+    }
+  }, [wallet.isConnected, wallet.address, swapPreview, addSystemMessageProxy, approveToken, getExplorerUrl, refreshBalances, saveTransaction]);
 
   // Detect coin mentioned in messages → update right panel
   const handleSendMessage = useCallback(
@@ -261,9 +473,23 @@ function App() {
         setRightPanelView('watchlist');
       }
 
-      sendMessage(content, { address: wallet.address, holdings: wallet.holdings, contacts });
+      // Interceptor: Confirm swap
+      const confirmSwapMatch = content.match(/^(?:confirm swap|yes swap|swap now)$/i);
+      if (confirmSwapMatch && rightPanelView === 'swap' && swapPreview) {
+        handleConfirmSwap();
+        return;
+      }
+
+      // Interceptor: View history
+      if (/(?:show my history|what did i do recently|show transactions|what did i send last week|trade journal)/i.test(content)) {
+        setRightPanelView('history');
+        sendMessage(content, { address: wallet.address, holdings: wallet.holdings, contacts, history });
+        return;
+      }
+
+      sendMessage(content, { address: wallet.address, holdings: wallet.holdings, contacts, history });
     },
-    [sendMessage, addContact, contacts, getContact, removeContact, addSystemMessage, rightPanelView, transactionPreview, handleConfirmTransaction, wallet]
+    [sendMessage, addContact, contacts, getContact, removeContact, addSystemMessage, rightPanelView, transactionPreview, handleConfirmTransaction, wallet, history]
   );
 
   // Wallet connection
@@ -295,11 +521,12 @@ function App() {
     [sendMessage, wallet.address, wallet.holdings, contacts]
   );
 
-  // Save API key to localStorage
-  const handleSaveApiKey = useCallback((key: string) => {
-    setApiKey(key);
-    localStorage.setItem('groq_api_key', key);
-  }, []);
+  // Save Settings
+  const handleSaveSettings = useCallback((groqKey: string) => {
+    setApiKey(groqKey);
+    localStorage.setItem('groq_api_key', groqKey);
+    addSystemMessageProxy("✅ Settings saved successfully.");
+  }, [addSystemMessageProxy]);
 
   return (
     <div
@@ -358,6 +585,9 @@ function App() {
           onContactSendClick={(name) => handleSendMessage(`Send to ${name}`)}
           onContactDeleteClick={(name) => handleSendMessage(`Delete contact ${name}`)}
           onConfirmTransactionClick={handleConfirmTransaction}
+          onConfirmSwapClick={handleConfirmSwap}
+          swapPreview={swapPreview}
+          history={history}
           onSwitchNetwork={switchNetwork}
         />
       </div>
@@ -366,7 +596,7 @@ function App() {
       {settingsOpen && (
         <SettingsModal
           apiKey={apiKey}
-          onSave={handleSaveApiKey}
+          onSave={handleSaveSettings}
           onClose={() => setSettingsOpen(false)}
         />
       )}

@@ -29,8 +29,25 @@ export type RightPanelView =
   | 'portfolio'
   | 'coin-chart'
   | 'transaction'
+  | 'swap'
   | 'watchlist'
-  | 'contacts';
+  | 'contacts'
+  | 'history';
+
+export interface AppTransaction {
+  id: string;
+  type: 'send' | 'swap' | 'receive';
+  fromToken: string;
+  fromAmount: string;
+  toToken?: string;
+  toAmount?: string;
+  toAddress?: string;
+  contactName?: string;
+  timestamp: number;
+  status: 'pending' | 'success' | 'failed';
+  hash: string;
+  network: string;
+}
 
 export interface TransactionPreview {
   recipientName: string;
@@ -39,6 +56,19 @@ export interface TransactionPreview {
   coin: string;
   estimatedGas: string;
   networkName?: string;
+}
+
+export interface SwapPreview {
+  fromToken: string;
+  fromTokenAddress: string;
+  fromAmount: string;
+  toToken: string;
+  toTokenAddress: string;
+  toAmount: string;
+  rate: string;
+  estimatedGas: string;
+  slippage: number;
+  rawSwapData?: any;
 }
 
 export interface ChartDataPoint {

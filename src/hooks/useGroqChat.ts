@@ -1,20 +1,30 @@
-import { useState, useCallback, useRef } from 'react';
-import type { Message, PortfolioHolding } from '../types';
+import { useState, useCallback, useRef, useEffect } from 'react';
+import type { Message, PortfolioHolding, AppTransaction } from '../types';
 
 const SYSTEM_PROMPT = `You are CryptoPilot, a crypto co-pilot AI agent. 
 CRITICAL: You are currently in LIVE MODE. Your training data for cryptocurrency prices is COMPLETELY OBSOLETE (dating back to 2023). You MUST ONLY use the [CONTEXT] prices provided in the current message. If no [CONTEXT] is provided, state that you don't have live prices. NEVER mention BTC at $20k-$30k or ETH at $1k-$2k unless the live data confirms it. 
 
-TRANSACTION PROTOCOL:
-- You help users prepare transactions.
-- NEVER claim a transaction is "sent", "complete", or "confirmed" yourself. 
-- If a user wants to send/transfer funds, and you have the AMOUNT, COIN, and RECIPIENT NAME/ADDRESS:
-  1. Say: "I've prepared the transfer of [AMOUNT] [COIN] to [NAME]. Please verify the details on the right and confirm to proceed."
-  2. ALWAYS append this tag to the very end of your message: [[ACTION:SEND|amount:X|coin:Y|address:Z|name:W]]
-- If details are missing, ask for them. Use the ACTUAL WALLET HOLDINGS from context to verify if they have the funds.
+TRANSACTION/SWAP PROTOCOL:
+- You help users prepare transactions and swaps.
+- NEVER claim a transaction/swap is "sent", "complete", or "confirmed" yourself. 
+- For SEND: If you have AMOUNT, COIN, and RECIPIENT:
+  Say: "I've prepared the transfer of [AMOUNT] [COIN] to [NAME]. Please verify the details on the right and confirm."
+  Append: [[ACTION:SEND|amount:X|coin:Y|address:Z|name:W]]
+- For SWAP: If you have FROM_TOKEN, TO_TOKEN, and AMOUNT:
+  Say: "I've prepared the swap from [AMOUNT] [FROM_TOKEN] to [TO_TOKEN]. Fetching best PancakeSwap quote..."
+  Append: [[ACTION:SWAP|fromToken:X|toToken:Y|amount:Z]]
+- Check ACTUAL WALLET HOLDINGS context before preparing any action.
 
 You help users manage their crypto portfolio, analyze markets, and detect chart patterns. Before any trade action always explain the why — sentiment, risk level, market condition. Keep responses concise and conversational. Always reason out loud before giving advice. Use markdown-style formatting with **bold** for key terms and numbers. Be friendly but professional.`;
 
-export function useGroqChat(apiKey: string, onActionDetected?: (action: string, params: Record<string, string>) => void) {
+export function useGroqChat(apiKey: string, onActionDetected?: (action: string, params: Record<string, string>) => void | Promise<void>) {
+  const onActionDetectedRef = useRef(onActionDetected);
+  
+  // Keep ref in sync
+  useEffect(() => {
+    onActionDetectedRef.current = onActionDetected;
+  }, [onActionDetected]);
+
   const [messages, setMessages] = useState<Message[]>([
     {
       id: 'init',
@@ -27,7 +37,7 @@ export function useGroqChat(apiKey: string, onActionDetected?: (action: string, 
   const abortRef = useRef<AbortController | null>(null);
 
   const sendMessage = useCallback(
-    async (content: string, walletContext?: { address: string | null; holdings: PortfolioHolding[]; contacts?: Record<string, string> }) => {
+    async (content: string, walletContext?: { address: string | null; holdings: PortfolioHolding[]; contacts?: Record<string, string>; history?: AppTransaction[] }) => {
       if (!content.trim() || isLoading) return;
 
       const userMsg: Message = {
@@ -88,23 +98,38 @@ export function useGroqChat(apiKey: string, onActionDetected?: (action: string, 
 
       // Build saved contacts context
       let contactsStr = 'NO CONTACTS SAVED.';
-      if (walletContext && walletContext.contacts && Object.keys(walletContext.contacts).length > 0) {
-        contactsStr = `SAVED CONTACTS (Address Book):\n` + 
+      if (walletContext && walletContext.contacts) {
+        contactsStr = `USER'S SAVED CONTACTS:\n` + 
           Object.entries(walletContext.contacts).map(([name, addr]) => `${name}: ${addr}`).join('\n');
       }
 
+      // Build Transaction History context
+      let historyStr = 'NO RECENT TRANSACTION HISTORY.';
+      if (walletContext && walletContext.history && walletContext.history.length > 0) {
+        historyStr = `USER'S RECENT TRANSACTION HISTORY:\n` +
+          walletContext.history.slice(0, 10).map(tx => 
+            tx.type === 'swap' 
+              ? `${tx.type.toUpperCase()}: ${tx.fromAmount} ${tx.fromToken} → ${tx.toAmount} ${tx.toToken} | ${new Date(tx.timestamp).toLocaleString()} | ${tx.status}${tx.hash ? ` | Hash: ${tx.hash}` : ''}`
+              : `${tx.type.toUpperCase()}: ${tx.fromAmount} ${tx.fromToken} → ${tx.contactName || tx.toAddress} | ${new Date(tx.timestamp).toLocaleString()} | ${tx.status}${tx.hash ? ` | Hash: ${tx.hash}` : ''}`
+          ).join('\n');
+      }
+
       const contextualPrompt = `
-LIVE MARKET DATA (Data fetched at: ${new Date().toISOString()}):
+[LIVE PRICES]
 ${livePricesContext}
 
+[WALLET CONTEXT]
 ${walletHoldingsStr}
 
 ${contactsStr}
+
+${historyStr}
 
 CRITICAL RULES: 
 1. Never assume the user holds any cryptocurrency unless it explicitly appears in their ACTUAL WALLET HOLDINGS listed above. 
 2. If user asks about a coin they don't hold, give market analysis but clearly state "you don't currently hold this coin."
 3. Use ONLY the above prices and balances. ignore your training data.
+4. Use the TRANSACTION HISTORY to answer questions about past activity.
 `;
 
       console.log('Final Context for AI:', contextualPrompt);
@@ -156,7 +181,9 @@ CRITICAL RULES:
              if (k && v) params[k.trim()] = v.trim();
           });
           
-          onActionDetected(type, params);
+          if (onActionDetectedRef.current) {
+            onActionDetectedRef.current(type, params);
+          }
           
           // Strip actions from visible chat
           aiContent = aiContent.replace(/\[\[ACTION:.*?\]\]/g, '').trim();

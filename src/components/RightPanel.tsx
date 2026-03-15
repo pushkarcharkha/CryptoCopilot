@@ -10,7 +10,7 @@ import {
   Pie,
   Cell,
 } from 'recharts';
-import type { CryptoPrice, ChartDataPoint, RightPanelView, WalletState, TransactionPreview } from '../types';
+import type { CryptoPrice, ChartDataPoint, RightPanelView, WalletState, TransactionPreview, SwapPreview, AppTransaction } from '../types';
 
 interface RightPanelProps {
   view: RightPanelView;
@@ -21,11 +21,14 @@ interface RightPanelProps {
   chartCoinName: string;
   wallet: WalletState;
   transactionPreview?: TransactionPreview | null;
+  swapPreview?: SwapPreview | null;
   contacts?: Record<string, string>;
   onContactSendClick?: (name: string) => void;
   onContactDeleteClick?: (name: string) => void;
   onConfirmTransactionClick?: () => void;
-  onSwitchNetwork?: (targetChainId: number) => void;
+  onConfirmSwapClick?: () => void;
+  onSwitchNetwork?: (targetChainId: number) => Promise<void>;
+  history?: AppTransaction[];
 }
 
 function formatPrice(n: number) {
@@ -71,12 +74,17 @@ const RightPanel: React.FC<RightPanelProps> = ({
   chartCoinName,
   wallet,
   transactionPreview,
+  swapPreview,
   contacts = {},
   onContactSendClick,
   onContactDeleteClick,
   onConfirmTransactionClick,
+  onConfirmSwapClick,
   onSwitchNetwork,
+  history = [],
 }) => {
+  const [historyFilter, setHistoryFilter] = React.useState<'all' | 'send' | 'swap' | 'week' | 'month'>('all');
+
   // Use real wallet holdings
   const holdings = wallet.isConnected ? wallet.holdings : [];
 
@@ -92,8 +100,28 @@ const RightPanel: React.FC<RightPanelProps> = ({
   const chartMin = chartData.length ? Math.min(...chartData.map((d) => d.price)) * 0.998 : 0;
   const chartMax = chartData.length ? Math.max(...chartData.map((d) => d.price)) * 1.002 : 0;
   const chartTrend = chartData.length >= 2
-    ? chartData[chartData.length - 1].price >= chartData[0].price
-    : true;
+    ? chartData[chartData.length - 1].price >= chartData[0].price ? 'up' : 'down'
+    : 'neutral';
+
+  // History Filtering Logic
+  const filteredHistory = history.filter(tx => {
+    if (historyFilter === 'all') return true;
+    if (historyFilter === 'send') return tx.type === 'send';
+    if (historyFilter === 'swap') return tx.type === 'swap';
+    
+    const txDate = new Date(tx.timestamp);
+    const now = new Date();
+    if (historyFilter === 'week') {
+      const oneWeekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+      return txDate >= oneWeekAgo;
+    }
+    if (historyFilter === 'month') {
+      const oneMonthAgo = new Date(now.getFullYear(), now.getMonth() - 1, now.getDate());
+      return txDate >= oneMonthAgo;
+    }
+    return true;
+  });
+
 
   return (
     <div
@@ -134,6 +162,7 @@ const RightPanel: React.FC<RightPanelProps> = ({
           {view === 'transaction' && 'Transaction'}
           {view === 'watchlist' && 'Watchlist'}
           {view === 'contacts' && 'Address Book'}
+          {view === 'history' && 'Trade Journal'}
         </span>
         <span style={{ marginLeft: 'auto', fontSize: '10px', color: 'var(--text-muted)', fontFamily: 'JetBrains Mono, monospace' }}>
           {new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
@@ -522,6 +551,64 @@ const RightPanel: React.FC<RightPanelProps> = ({
           </div>
         )}
 
+        {/* ===== SWAP VIEW ===== */}
+        {view === 'swap' && (
+          <div className="panel-content fade-in">
+            <div className="glass-card" style={{ padding: '16px', marginBottom: '12px', borderColor: 'rgba(139,92,246,0.2)' }}>
+              <div style={{ fontSize: '11px', color: '#8b5cf6', marginBottom: '10px', fontWeight: 600 }}>
+                🥞 PANCAKESWAP PREVIEW
+              </div>
+              {[
+                { label: 'From', value: swapPreview ? `${swapPreview.fromAmount} ${swapPreview.fromToken}` : 'N/A' },
+                { label: 'To (est.)', value: swapPreview ? `${parseFloat(swapPreview.toAmount).toFixed(6)} ${swapPreview.toToken}` : 'N/A' },
+                { label: 'Rate', value: swapPreview ? swapPreview.rate : 'N/A' },
+                { label: 'Slippage', value: '1%' },
+                { label: 'Gas (est.)', value: swapPreview ? swapPreview.estimatedGas : 'Low' },
+                { label: 'Network', value: 'BNB Smart Chain' },
+              ].map((row) => (
+                <div
+                  key={row.label}
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    padding: '8px 0',
+                    borderBottom: '1px solid var(--border-subtle)',
+                    fontSize: '13px',
+                  }}
+                >
+                  <span style={{ color: 'var(--text-muted)' }}>{row.label}</span>
+                  <span style={{ color: '#e2e8f0', fontFamily: 'JetBrains Mono, monospace', fontSize: '12px' }}>{row.value}</span>
+                </div>
+              ))}
+              <button
+                onClick={onConfirmSwapClick}
+                style={{
+                  marginTop: '12px',
+                  width: '100%',
+                  padding: '10px',
+                  background: 'linear-gradient(135deg, rgba(139,92,246,0.3), rgba(0,212,255,0.2))',
+                  border: '1px solid rgba(139,92,246,0.4)',
+                  borderRadius: '10px',
+                  color: '#a78bfa',
+                  fontWeight: 600,
+                  fontSize: '13px',
+                  cursor: 'pointer',
+                  fontFamily: 'Inter, sans-serif',
+                  transition: 'all 0.2s',
+                }}
+                onMouseEnter={(e) => e.currentTarget.style.boxShadow = '0 0 15px rgba(139,92,246,0.3)'}
+                onMouseLeave={(e) => e.currentTarget.style.boxShadow = 'none'}
+              >
+                Confirm Swap →
+              </button>
+            </div>
+            <p style={{ fontSize: '11px', color: 'var(--text-muted)', textAlign: 'center', padding: '0 10px' }}>
+              Swaps are executed through PancakeSwap V2 on BNB Chain. Final amount may vary slightly based on price impact.
+            </p>
+          </div>
+        )}
+
+
         {/* ===== WATCHLIST VIEW ===== */}
         {view === 'watchlist' && (
           <div className="panel-content fade-in">
@@ -630,6 +717,124 @@ const RightPanel: React.FC<RightPanelProps> = ({
                   </button>
                 </div>
               ))
+            )}
+          </div>
+        )}
+
+
+
+        {/* ===== HISTORY VIEW ===== */}
+        {view === 'history' && (
+          <div className="panel-content fade-in" style={{ paddingBottom: '20px' }}>
+            <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span>Transaction History</span>
+              <span style={{ background: 'rgba(0, 212, 255, 0.1)', color: 'var(--accent-cyan)', padding: '2px 8px', borderRadius: '10px' }}>
+                {filteredHistory.length}
+              </span>
+            </div>
+
+            {/* Filter Pills */}
+            <div style={{ display: 'flex', gap: '6px', marginBottom: '16px', overflowX: 'auto', paddingBottom: '4px', scrollbarWidth: 'none' }}>
+              {[
+                { id: 'all', label: 'All' },
+                { id: 'send', label: 'Sends' },
+                { id: 'swap', label: 'Swaps' },
+                { id: 'week', label: 'This Week' },
+                { id: 'month', label: 'This Month' },
+              ].map(f => (
+                <button
+                  key={f.id}
+                  onClick={() => setHistoryFilter(f.id as any)}
+                  style={{
+                    padding: '4px 10px',
+                    borderRadius: '8px',
+                    fontSize: '11px',
+                    whiteSpace: 'nowrap',
+                    background: historyFilter === f.id ? 'rgba(0, 212, 255, 0.2)' : 'rgba(255, 255, 255, 0.05)',
+                    border: `1px solid ${historyFilter === f.id ? 'rgba(0, 212, 255, 0.4)' : 'transparent'}`,
+                    color: historyFilter === f.id ? 'var(--accent-cyan)' : 'var(--text-muted)',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s',
+                    fontWeight: historyFilter === f.id ? 600 : 400
+                  }}
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
+
+            {filteredHistory.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '60px 20px', color: 'var(--text-muted)' }}>
+                <div style={{ fontSize: '32px', marginBottom: '16px' }}>📓</div>
+                <p style={{ fontSize: '13px' }}>{history.length === 0 ? "No transactions yet. Start by sending crypto or making a swap." : "No transactions match this filter."}</p>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                {filteredHistory.map((tx) => (
+                  <div key={tx.id || tx.hash} className="glass-card" style={{ padding: '14px', position: 'relative', overflow: 'hidden' }}>
+                    {/* Status indicator line */}
+                    <div style={{ 
+                      position: 'absolute', 
+                      left: 0, 
+                      top: 0, 
+                      bottom: 0, 
+                      width: '3px', 
+                      background: tx.status === 'success' ? '#10b981' : tx.status === 'failed' ? '#ef4444' : '#f59e0b' 
+                    }} />
+
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '10px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                        <div style={{ 
+                          width: '32px', 
+                          height: '32px', 
+                          borderRadius: '8px', 
+                          background: tx.type === 'send' ? 'rgba(239, 68, 68, 0.1)' : tx.type === 'swap' ? 'rgba(0, 212, 255, 0.1)' : 'rgba(16, 185, 129, 0.1)',
+                          color: tx.type === 'send' ? '#ef4444' : tx.type === 'swap' ? '#00d4ff' : '#10b981',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          fontSize: '16px'
+                        }}>
+                          {tx.type === 'send' ? '↑' : tx.type === 'swap' ? '⇄' : '↓'}
+                        </div>
+                        <div>
+                          <div style={{ fontWeight: 600, fontSize: '14px', color: '#e2e8f0' }}>
+                            {tx.type === 'send' ? `Send ${tx.fromAmount} ${tx.fromToken}` : tx.type === 'swap' ? `Swap ${tx.fromAmount} ${tx.fromToken}` : `Receive ${tx.fromAmount} ${tx.fromToken}`}
+                          </div>
+                          <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                            {tx.type === 'send' ? `To: ${tx.contactName || tx.toAddress?.slice(0, 6) + '...' + tx.toAddress?.slice(-4)}` : tx.type === 'swap' ? `For: ${tx.toAmount} ${tx.toToken}` : `From: ${tx.toAddress?.slice(0, 6) + '...' + tx.toAddress?.slice(-4)}`}
+                          </div>
+                        </div>
+                      </div>
+                      <div style={{ textAlign: 'right' }}>
+                        <div style={{ 
+                          fontSize: '10px', 
+                          fontWeight: 700,
+                          color: tx.status === 'success' ? '#10b981' : tx.status === 'failed' ? '#ef4444' : '#f59e0b',
+                          textTransform: 'uppercase'
+                        }}>
+                          {tx.status === 'success' ? '✅ Success' : tx.status === 'failed' ? '❌ Failed' : '⏳ Pending'}
+                        </div>
+                        <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                          {new Date(tx.timestamp).toLocaleDateString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: '10px', borderTop: '1px solid var(--border-subtle)', marginTop: '8px' }}>
+                      <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{tx.network || 'BNB Smart Chain'}</span>
+                      <a 
+                        href={`https://bscscan.com/tx/${tx.hash}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{ fontSize: '10px', color: 'var(--accent-cyan)', textDecoration: 'none', fontWeight: 600 }}
+                      >
+                        View on Explorer ↗
+                      </a>
+                    </div>
+                  </div>
+                ))}
+              </div>
             )}
           </div>
         )}
