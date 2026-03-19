@@ -46,6 +46,12 @@ const FEATURES: {
     message: 'What is the current market sentiment? Show me the Fear & Greed index and the latest top news.',
   },
   {
+    id: 'futures',
+    icon: '📊',
+    label: 'Futures',
+    message: 'You\'re in paper futures mode. You can open long or short positions with leverage. This is simulated — no real money involved. Try saying \'open a long BTC position with 10x leverage for $100\'',
+  },
+  {
     id: 'debate',
     icon: '⚔️',
     label: 'Debate Mode',

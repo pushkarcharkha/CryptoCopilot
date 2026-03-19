@@ -1,25 +1,19 @@
 import React from 'react';
 import {
-  AreaChart,
-  Area,
-  XAxis,
-  YAxis,
   Tooltip,
   ResponsiveContainer,
   PieChart,
   Pie,
   Cell,
 } from 'recharts';
-import type { CryptoPrice, ChartDataPoint, RightPanelView, WalletState, TransactionPreview, SwapPreview, AppTransaction, CoinGeckoCoin, NewsArticle, FearGreedData } from '../types';
+import type { CryptoPrice, RightPanelView, WalletState, TransactionPreview, SwapPreview, AppTransaction, CoinGeckoCoin, NewsArticle, FearGreedData, FuturesPosition } from '../types';
 import NewsSentimentPanel from './NewsSentimentPanel';
+import FuturesPanel from './FuturesPanel';
 
 interface RightPanelProps {
   view: RightPanelView;
   prices: CryptoPrice[];
   pricesLoading: boolean;
-  chartData: ChartDataPoint[];
-  chartLoading: boolean;
-  chartCoinName: string;
   wallet: WalletState;
   transactionPreview?: TransactionPreview | null;
   swapPreview?: SwapPreview | null;
@@ -46,6 +40,10 @@ interface RightPanelProps {
   newsError?: string | null;
   newsLastUpdated?: number | null;
   cryptoPanicToken?: string;
+  futuresBalance?: number;
+  futuresPositions?: FuturesPosition[];
+  onCloseFuturesPosition?: (id: number, currentPrice: number) => void;
+  futuresPrices?: Record<string, { usd: number }> | null;
 }
 
 function formatPrice(n: number | null | undefined) {
@@ -151,9 +149,6 @@ const RightPanel: React.FC<RightPanelProps> = ({
   view,
   prices,
   pricesLoading,
-  chartData,
-  chartLoading,
-  chartCoinName,
   wallet,
   transactionPreview,
   swapPreview,
@@ -180,6 +175,10 @@ const RightPanel: React.FC<RightPanelProps> = ({
   newsError = null,
   newsLastUpdated = null,
   cryptoPanicToken = '',
+  futuresBalance = 0,
+  futuresPositions = [],
+  onCloseFuturesPosition,
+  futuresPrices = null,
 }) => {
   const [historyFilter, setHistoryFilter] = React.useState<'all' | 'send' | 'swap' | 'week' | 'month'>('all');
   const [watchlistTab, setWatchlistTab] = React.useState<'my' | 'all'>('my');
@@ -197,11 +196,7 @@ const RightPanel: React.FC<RightPanelProps> = ({
 
   const totalPortfolioValue = holdingsWithValues.reduce((sum, h) => sum + h.valueUsd, 0);
 
-  const chartMin = chartData.length ? Math.min(...chartData.map((d) => d.price)) * 0.998 : 0;
-  const chartMax = chartData.length ? Math.max(...chartData.map((d) => d.price)) * 1.002 : 0;
-  const chartTrend = chartData.length >= 2
-    ? chartData[chartData.length - 1].price >= chartData[0].price ? 'up' : 'down'
-    : 'neutral';
+
 
   // History Filtering Logic
   const filteredHistory = history.filter(tx => {
@@ -260,6 +255,7 @@ const RightPanel: React.FC<RightPanelProps> = ({
           {view === 'contacts' && 'Address Book'}
           {view === 'history' && 'Trade Journal'}
           {view === 'news-sentiment' && 'News & Sentiment'}
+          {view === 'futures' && 'Paper Futures Trading'}
           {view === 'coin-chart' && (
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               <button 
@@ -825,6 +821,16 @@ const RightPanel: React.FC<RightPanelProps> = ({
           </div>
         )}
 
+        {/* ===== FUTURES VIEW ===== */}
+        {view === 'futures' && (
+          <FuturesPanel
+            balance={futuresBalance}
+            positions={futuresPositions}
+            prices={futuresPrices}
+            onClosePosition={onCloseFuturesPosition || (() => {})}
+          />
+        )}
+
         {/* ===== NEWS & SENTIMENT VIEW ===== */}
         {view === 'news-sentiment' && (
           <NewsSentimentPanel
@@ -1037,7 +1043,7 @@ const RightPanel: React.FC<RightPanelProps> = ({
           fontFamily: 'JetBrains Mono, monospace',
         }}
       >
-        🔄 Prices refresh every 60s · CoinGecko API
+        🟢 Live Prices · Binance WS & CoinGecko
       </div>
     </div>
   );

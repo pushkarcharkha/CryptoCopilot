@@ -33,7 +33,9 @@ export type RightPanelView =
   | 'watchlist'
   | 'contacts'
   | 'history'
-  | 'news-sentiment';
+  | 'history'
+  | 'news-sentiment'
+  | 'futures';
 
 export interface AppTransaction {
   id: string;
@@ -114,6 +116,24 @@ export interface CoinGeckoCoin {
   };
 }
 
+export interface FuturesPosition {
+  id: number;
+  coin: string;
+  coinId: string;
+  direction: 'long' | 'short';
+  leverage: number;
+  entryPrice: number;
+  size: number;
+  margin: number;
+  liquidationPrice: number;
+  openedAt: number;
+  closedAt?: number;
+  status: 'open' | 'closed' | 'liquidated';
+  exitPrice?: number;
+  pnl?: number;
+  pnlPercent?: number;
+}
+
 export type SidebarFeature =
   | 'portfolio'
   | 'wallet'
@@ -122,7 +142,8 @@ export type SidebarFeature =
   | 'morning'
   | 'debate'
   | 'journal'
-  | 'news-sentiment';
+  | 'news-sentiment'
+  | 'futures';
 
 export interface NewsArticle {
   title: string;

@@ -26,11 +26,22 @@ Examples:
 - WATCHLIST: [[ACTION:WATCHLIST_ADD|coinId:bitcoin]]
 - CHART: [[ACTION:SHOW_CHART|coinId:ethereum]]
 - NEWS: [[ACTION:SHOW_NEWS]]
+- FUTURES_OPEN: [[ACTION:FUTURES_OPEN|coin:BTC|direction:long|leverage:10|size:100]]
+- FUTURES_CLOSE: [[ACTION:FUTURES_CLOSE|positionId:123456789]]
 
 IMPORTANT: Always check the ADDRESS BOOK below for contact addresses before preparing a SEND action.
 - NEVER guess or assume a transaction amount (like 0.1) or coin symbol (like USDT) if the user did not specify them.
 - If details are missing (e.g. they just say "Send to Pushkar"), respond by asking for the amount and the coin symbol.
-- ONLY generate the [[ACTION:SEND|...]] block when the user has provided a specific amount and coin.`;
+- ONLY generate the [[ACTION:SEND|...]] block when the user has provided a specific amount and coin.
+
+[FUTURES RULES]
+- Supported coins: BTC, ETH, BNB, SOL, ADA, AVAX, LINK, DOT.
+- Leverage: 2x, 5x, 10x, 20x, 50x, 100x.
+- 50x or above leverage is extremely risky. Warn the user if they request it.
+- When opening a position, confirm the details: "Opening a 10x long BTC position. Entry price: $71,240. Size: $100. Margin used: $10. Liquidation price: $64,116. Good luck! 🚀"
+- When a user asks about their positions or PnL, reference the provided PAPER FUTURES POSITIONS context.
+- To open a position, use [[ACTION:FUTURES_OPEN|coin:SYMBOL|direction:long/short|leverage:NUM|size:USD_AMOUNT]].
+- To close a position, use [[ACTION:FUTURES_CLOSE|positionId:ID]].`;
 
 export function useGroqChat(apiKey: string, onActionDetected?: (action: string, params: Record<string, string>) => void | Promise<void>) {
   const onActionDetectedRef = useRef(onActionDetected);
@@ -62,6 +73,10 @@ export function useGroqChat(apiKey: string, onActionDetected?: (action: string, 
       sentimentContext?: {
         fearGreed?: any[];
         news?: any[];
+      },
+      futuresContext?: {
+        balance: number;
+        positions: any[];
       }
     ) => {
       if (!content.trim() || isLoading) return;
@@ -134,7 +149,15 @@ export function useGroqChat(apiKey: string, onActionDetected?: (action: string, 
 Address: ${walletContext?.address || 'Not connected'}
 Holdings: ${holdings}
 ADDRESS BOOK: ${contacts}
-Watchlist: ${walletContext?.watchlist?.join(', ') || 'Empty'}`;
+Watchlist: ${walletContext?.watchlist?.join(', ') || 'Empty'}
+
+PAPER FUTURES POSITIONS:
+${!futuresContext || futuresContext.positions.length === 0 ? 'No open positions' : 
+  futuresContext.positions.map(p => 
+    `${p.direction.toUpperCase()} ${p.coin} ${p.leverage}x | Entry: $${p.entryPrice} | Size: $${p.size} | Liq: $${p.liquidationPrice}`
+  ).join('\n')}
+
+Virtual Balance: $${futuresContext?.balance || '1000'}`;
 
       const dynamicSystemMessage = `
 [LIVE DATA]

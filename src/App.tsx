@@ -7,12 +7,13 @@ import SignalFeed from './components/SignalFeed';
 import SettingsModal from './components/SettingsModal';
 import { useGroqChat } from './hooks/useGroqChat';
 import { useWallet, TOKEN_ADDRESSES } from './hooks/useWallet';
-import { useCryptoPrices, useCoinChart } from './hooks/useCrypto';
+import { useCryptoPrices } from './hooks/useCrypto';
 import { useContacts } from './hooks/useContacts';
 import { usePancakeSwap, BNB_TOKENS, WBNB } from './hooks/usePancakeSwap';
 import { useTransactionHistory } from './hooks/useTransactionHistory';
 import { useWatchlist } from './hooks/useWatchlist';
 import { useNews } from './hooks/useNews';
+import { useFutures, SUPPORTED_FUTURES_COINS } from './hooks/useFutures';
 import type { RightPanelView, SidebarFeature, TraderSignal, TransactionPreview, SwapPreview, CoinGeckoCoin } from './types';
 import { ethers } from 'ethers';
 
@@ -49,6 +50,11 @@ function App() {
     error: newsError, 
     lastUpdated: newsLastUpdated 
   } = useNews(cryptoPanicToken);
+
+  const { prices, isLoading: pricesLoading } = useCryptoPrices(['bitcoin', 'ethereum', 'solana', 'cardano', 'chainlink', 'binancecoin', 'matic-network', 'avalanche-2', 'tether', 'usd-coin', 'ripple', 'polkadot']);
+  
+  const futuresPricesMap = prices ? Object.fromEntries(prices.map(p => [p.id, { usd: p.price }])) : null;
+  const { positions: futuresPositions, balance: futuresBalance, openPosition, closePosition, getLivePnL } = useFutures(futuresPricesMap);
 
   // Helper for auto-switching panels that respects manual overrides
   const setPanelSafe = useCallback((panel: RightPanelView) => {
@@ -148,17 +154,49 @@ function App() {
       setRightPanelView('news-sentiment');
       setManualPanelOverride('news-sentiment'); // Hard override when showing news
       addSystemMessageProxy(`📊 Opening Market News & Sentiment...`);
+    } else if (action === 'FUTURES_OPEN') {
+      const { coin, direction, leverage, size } = params;
+      if (coin && direction && leverage && size && prices) {
+        try {
+          const coinId = SUPPORTED_FUTURES_COINS[coin.toUpperCase()];
+          const currentPrice = prices.find(p => p.id === coinId)?.price || 0;
+          if (currentPrice === 0) throw new Error(`Price for ${coin} not available.`);
+          
+          const lev = parseInt(leverage);
+          if (lev >= 50) {
+            addSystemMessageProxy(`⚠️ **Warning**: ${lev}x leverage is extremely risky. A small price move against you will liquidate the position.`);
+          }
+
+          const pos = openPosition(coin, direction as 'long' | 'short', lev, parseFloat(size), currentPrice);
+          setRightPanelView('futures');
+          setManualPanelOverride('futures');
+          addSystemMessageProxy(`🚀 **Position Opened**\n${pos.direction.toUpperCase()} ${pos.coin} ${pos.leverage}x\nEntry: $${pos.entryPrice.toLocaleString()}\nSize: $${pos.size}\nMargin: $${pos.margin.toFixed(2)}\nLiq Price: $${pos.liquidationPrice.toLocaleString(undefined, { maximumFractionDigits: 2 })}`);
+        } catch (err: any) {
+          addSystemMessageProxy(`❌ Failed to open position: ${err.message}`);
+        }
+      }
+    } else if (action === 'FUTURES_CLOSE') {
+      const { positionId } = params;
+      if (positionId && prices) {
+        const id = parseInt(positionId);
+        const pos = futuresPositions.find(p => p.id === id);
+        if (pos) {
+          const coinId = SUPPORTED_FUTURES_COINS[pos.coin.toUpperCase()];
+          const currentPrice = prices.find(p => p.id === coinId)?.price || 0;
+          closePosition(id, currentPrice);
+          
+          const { pnl, pnlPercent } = getLivePnL(pos, currentPrice);
+          addSystemMessageProxy(`✅ **Position Closed**\n${pos.coin} ${pos.direction.toUpperCase()} closed at $${currentPrice.toLocaleString()}\nPnL: ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)} (${pnlPercent.toFixed(2)}%)`);
+        }
+      }
     }
-  }, [wallet.networkName, wallet.address, getSwapQuote, addSystemMessageProxy, toggleWatchlist, allCoins, manualPanelOverride, setPanelSafe]);
+  }, [wallet.networkName, wallet.address, getSwapQuote, addSystemMessageProxy, toggleWatchlist, allCoins, manualPanelOverride, setPanelSafe, prices, openPosition, closePosition, futuresPositions, getLivePnL]);
 
   const { messages, isLoading, sendMessage, addSystemMessage, clearMessages } = useGroqChat(apiKey, handleAIAction);
   
   useEffect(() => {
     addSystemMessageRef.current = addSystemMessage;
   }, [addSystemMessage]);
-
-  const { prices, isLoading: pricesLoading } = useCryptoPrices(['bitcoin', 'ethereum', 'solana', 'cardano', 'chainlink', 'binancecoin', 'matic-network', 'avalanche-2', 'tether', 'usd-coin', 'ripple']);
-  const { chartData, isLoading: chartLoading, coinName: chartCoinName } = useCoinChart(activeCoin?.id || null);
 
   // Handle sidebar feature click → preset message + panel update
   const handleFeatureClick = useCallback(
@@ -177,12 +215,16 @@ function App() {
         fearGreed: fearGreedData, 
         news: newsData 
       };
+      const futuresCtx = {
+        balance: futuresBalance,
+        positions: futuresPositions
+      };
 
       // Update right panel based on feature
       if (feature === 'portfolio') {
         setRightPanelView('portfolio');
         setManualPanelOverride('portfolio');
-        sendMessage(message, walletCtx, sentimentCtx);
+        sendMessage(message, walletCtx, sentimentCtx, futuresCtx);
       } else if (feature === 'wallet') {
         setRightPanelView('contacts');
         setManualPanelOverride('contacts');
@@ -190,28 +232,32 @@ function App() {
       } else if (feature === 'watchlist') {
         setRightPanelView('watchlist');
         setManualPanelOverride('watchlist');
-        sendMessage(message, walletCtx, sentimentCtx);
+        sendMessage(message, walletCtx, sentimentCtx, futuresCtx);
       } else if (feature === 'chart') {
         const btc = allCoins.find(c => c.symbol === 'btc') || allCoins[0];
         if (btc) setActiveCoin(btc);
         setRightPanelView('coin-chart');
         setManualPanelOverride('coin-chart');
-        sendMessage(message, walletCtx, sentimentCtx);
+        sendMessage(message, walletCtx, sentimentCtx, futuresCtx);
       } else if (feature === 'journal') {
         setRightPanelView('history');
         setManualPanelOverride('history');
-        sendMessage(message, walletCtx, sentimentCtx);
+        sendMessage(message, walletCtx, sentimentCtx, futuresCtx);
       } else if (feature === 'news-sentiment') {
         setRightPanelView('news-sentiment');
         setManualPanelOverride('news-sentiment');
         // Silent - Do not sendMessage
+      } else if (feature === 'futures') {
+        setRightPanelView('futures');
+        setManualPanelOverride('futures');
+        addSystemMessage("You're in paper futures mode. You can open long or short positions with leverage. Try saying 'open a long BTC position with 10x leverage for $100'");
       } else {
         setRightPanelView('prices');
         setManualPanelOverride('prices');
-        sendMessage(message, walletCtx, sentimentCtx);
+        sendMessage(message, walletCtx, sentimentCtx, futuresCtx);
       }
     },
-    [sendMessage, addSystemMessage, wallet.address, wallet.holdings, contacts, history, watchlistIds, allCoins, fearGreedData, newsData]
+    [sendMessage, addSystemMessage, wallet.address, wallet.holdings, contacts, history, watchlistIds, allCoins, fearGreedData, newsData, futuresBalance, futuresPositions]
   );
 
   const handleConfirmTransaction = useCallback(async () => {
@@ -439,9 +485,12 @@ function App() {
       }, {
         fearGreed: fearGreedData,
         news: newsData
+      }, {
+        balance: futuresBalance,
+        positions: futuresPositions
       });
     },
-    [sendMessage, addContact, removeContact, contacts, wallet.address, wallet.holdings, history, watchlistIds, fearGreedData, newsData]
+    [sendMessage, addContact, removeContact, contacts, wallet.address, wallet.holdings, history, watchlistIds, fearGreedData, newsData, futuresBalance, futuresPositions]
   );
 
   const handleConnectWallet = useCallback(() => {
@@ -473,6 +522,9 @@ function App() {
     }, {
       fearGreed: fearGreedData,
       news: newsData
+    }, {
+      balance: futuresBalance,
+      positions: futuresPositions
     });
   };
 
@@ -524,9 +576,6 @@ function App() {
           view={rightPanelView}
           prices={prices}
           pricesLoading={pricesLoading}
-          chartData={chartData}
-          chartLoading={chartLoading}
-          chartCoinName={chartCoinName}
           wallet={wallet}
           transactionPreview={transactionPreview}
           contacts={contacts}
@@ -556,6 +605,16 @@ function App() {
           newsError={newsError}
           newsLastUpdated={newsLastUpdated}
           cryptoPanicToken={cryptoPanicToken}
+          futuresBalance={futuresBalance}
+          futuresPositions={futuresPositions}
+          onCloseFuturesPosition={(id) => {
+            const pos = futuresPositions.find(p => p.id === id);
+            if (pos) {
+              const currentPrice = prices.find(p => p.id === pos.coinId)?.price || 0;
+              closePosition(id, currentPrice);
+            }
+          }}
+          futuresPrices={futuresPricesMap}
         />
       </div>
 

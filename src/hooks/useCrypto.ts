@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import type { CryptoPrice, ChartDataPoint } from '../types';
 
 const COIN_META: Record<string, { symbol: string; name: string; icon: string; color: string }> = {
@@ -12,6 +12,8 @@ const COIN_META: Record<string, { symbol: string; name: string; icon: string; co
   'avalanche-2': { symbol: 'AVAX', name: 'Avalanche', icon: 'A', color: '#e84142' },
   tether: { symbol: 'USDT', name: 'Tether', icon: '₮', color: '#26a17b' },
   'usd-coin': { symbol: 'USDC', name: 'USD Coin', icon: '$', color: '#2775ca' },
+  ripple: { symbol: 'XRP', name: 'Ripple', icon: '✕', color: '#23292f' },
+  polkadot: { symbol: 'DOT', name: 'Polkadot', icon: 'P', color: '#e6007a' }
 };
 
 export function useCryptoPrices(coinIds: string[] = ['bitcoin', 'ethereum', 'solana']) {
@@ -20,16 +22,17 @@ export function useCryptoPrices(coinIds: string[] = ['bitcoin', 'ethereum', 'sol
   const [error, setError] = useState<string | null>(null);
   const prevPricesRef = useRef<Record<string, number>>({});
 
-  const fetchPrices = async () => {
+  const idsStr = coinIds.join(',');
+
+  const fetchPrices = useCallback(async () => {
     try {
-      const ids = coinIds.join(',');
       const res = await fetch(
-        `/api/coingecko/simple/price?ids=${ids}&vs_currencies=usd&include_24hr_change=true`
+        `/api/coingecko/simple/price?ids=${idsStr}&vs_currencies=usd&include_24hr_change=true`
       );
       if (!res.ok) throw new Error('CoinGecko API error');
       const data = await res.json();
 
-      const newPrices: CryptoPrice[] = coinIds.map((id) => {
+      const newPrices: CryptoPrice[] = idsStr.split(',').map((id) => {
         const meta = COIN_META[id] || { symbol: id.toUpperCase(), name: id, icon: '○', color: '#ffffff' };
         return {
           id,
@@ -50,13 +53,56 @@ export function useCryptoPrices(coinIds: string[] = ['bitcoin', 'ethereum', 'sol
       setError('Failed to fetch prices');
       setIsLoading(false);
     }
-  };
+  }, [idsStr]);
 
   useEffect(() => {
     fetchPrices();
-    const interval = setInterval(fetchPrices, 120000); // 2 minutes to avoid 429s
-    return () => clearInterval(interval);
-  }, []);
+    
+    // Connect to Binance WebSocket for live prices
+    const ws = new WebSocket('wss://stream.binance.com:9443/ws/!miniTicker@arr');
+    
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (Array.isArray(data)) {
+          setPrices(prevPrices => {
+            if (prevPrices.length === 0) return prevPrices;
+            
+            let updated = false;
+            const updatedPrices = prevPrices.map(p => {
+              // Stablecoins
+              if (p.symbol === 'USDT' || p.symbol === 'USDC') return p;
+              
+              const ticker = data.find(t => t.s === `${p.symbol}USDT`);
+              if (ticker) {
+                const newPrice = parseFloat(ticker.c);
+                const openPrice = parseFloat(ticker.o);
+                const change24h = openPrice > 0 ? ((newPrice - openPrice) / openPrice) * 100 : p.change24h;
+                
+                if (p.price !== newPrice) {
+                  updated = true;
+                  return { ...p, price: newPrice, change24h };
+                }
+              }
+              return p;
+            });
+            
+            return updated ? updatedPrices : prevPrices;
+          });
+        }
+      } catch (e) {
+        console.warn('Binance WS parse error', e);
+      }
+    };
+
+    ws.onerror = () => {
+      console.warn('Binance WebSocket error');
+    };
+
+    return () => {
+      ws.close();
+    };
+  }, [fetchPrices]);
 
   return { prices, isLoading, error, refetch: fetchPrices };
 }
