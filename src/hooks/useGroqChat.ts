@@ -1,47 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import type { Message, PortfolioHolding, AppTransaction } from '../types';
-
-const SYSTEM_PROMPT = `You are CryptoPilot — an intelligent, reasoning-driven crypto co-pilot. 
-
-[CRITICAL RULE: TRANSACTION PROCESSING]
-- You CANNOT process transactions or change balances yourself. You are a PREPARER.
-- To execute a transfer or swap, you MUST generate the [[ACTION:TYPE|...]] code. 
-- The user will THEN see a confirmation pop-up in the UI and must click "Confirm" to actually execute it.
-- NEVER say "I have processed the transaction" or "The transaction is complete" until AFTER the user confirms in the UI. 
-- Instead say: "I've prepared the transfer for you. Please review and confirm the details on the right."
-
-[LANGUAGE RULES]
-- Never use phrases like "blood in the streets", "dead cat bounce", "capitulation", "HODL", or "to the moon".
-- Speak like a smart friend — simple, clear, direct. No dramatic language.
-
-[NEWS & SENTIMENT RULES]
-- ONLY mention Fear & Greed for market/trade advice. Do NOT mention it for simple transfers (SEND).
-- If referencing news, naturally weave it into your response. No numbered lists.
-
-[ACTIONS PROTOCOL — STRICT FORMAT]
-You MUST use the exact format [[ACTION:TYPE|key:value|key:value]] to trigger app actions. 
-Examples:
-- SEND: [[ACTION:SEND|amount:0.1|coin:USDT|name:Pushkar|address:0x123...]]
-- SWAP: [[ACTION:SWAP|fromToken:BNB|toToken:USDT|amount:1]]
-- WATCHLIST: [[ACTION:WATCHLIST_ADD|coinId:bitcoin]]
-- CHART: [[ACTION:SHOW_CHART|coinId:ethereum]]
-- NEWS: [[ACTION:SHOW_NEWS]]
-- FUTURES_OPEN: [[ACTION:FUTURES_OPEN|coin:BTC|direction:long|leverage:10|size:100]]
-- FUTURES_CLOSE: [[ACTION:FUTURES_CLOSE|positionId:123456789]]
-
-IMPORTANT: Always check the ADDRESS BOOK below for contact addresses before preparing a SEND action.
-- NEVER guess or assume a transaction amount (like 0.1) or coin symbol (like USDT) if the user did not specify them.
-- If details are missing (e.g. they just say "Send to Pushkar"), respond by asking for the amount and the coin symbol.
-- ONLY generate the [[ACTION:SEND|...]] block when the user has provided a specific amount and coin.
-
-[FUTURES RULES]
-- Supported coins: BTC, ETH, BNB, SOL, ADA, AVAX, LINK, DOT.
-- Leverage: 2x, 5x, 10x, 20x, 50x, 100x.
-- 50x or above leverage is extremely risky. Warn the user if they request it.
-- When opening a position, confirm the details: "Opening a 10x long BTC position. Entry price: $71,240. Size: $100. Margin used: $10. Liquidation price: $64,116. Good luck! 🚀"
-- When a user asks about their positions or PnL, reference the provided PAPER FUTURES POSITIONS context.
-- To open a position, use [[ACTION:FUTURES_OPEN|coin:SYMBOL|direction:long/short|leverage:NUM|size:USD_AMOUNT]].
-- To close a position, use [[ACTION:FUTURES_CLOSE|positionId:ID]].`;
+import { detectAgent, detectFuturesIntent, buildAgentPrompt } from '../agents';
+import type { AgentType, AgentContext } from '../agents';
 
 export function useGroqChat(apiKey: string, onActionDetected?: (action: string, params: Record<string, string>) => void | Promise<void>) {
   const onActionDetectedRef = useRef(onActionDetected);
@@ -59,6 +19,7 @@ export function useGroqChat(apiKey: string, onActionDetected?: (action: string, 
     },
   ]);
   const [isLoading, setIsLoading] = useState(false);
+  const [lastAgent, setLastAgent] = useState<AgentType | null>(null);
 
   const sendMessage = useCallback(
     async (
@@ -77,7 +38,20 @@ export function useGroqChat(apiKey: string, onActionDetected?: (action: string, 
       futuresContext?: {
         balance: number;
         positions: any[];
-      }
+      },
+      activeFeature?: string | null,
+      chartAnalysisResults?: {
+        coin: string;
+        coinSymbol: string;
+        currentPrice: number;
+        support: number;
+        resistance: number;
+        ema20: number;
+        ema50: number;
+        trendline: number | null;
+        buySignals: number;
+        sellSignals: number;
+      } | null
     ) => {
       if (!content.trim() || isLoading) return;
 
@@ -102,7 +76,15 @@ export function useGroqChat(apiKey: string, onActionDetected?: (action: string, 
         return;
       }
 
-      // 1. Live Prices Context
+      // ── 1. Detect which agent should handle this ──────────────────────
+      const agent = detectAgent(content, activeFeature || null);
+      setLastAgent(agent);
+
+      // Detect futures intent to prevent accidental position opening
+      const futuresIntent = agent === 'FUTURES' ? detectFuturesIntent(content) : undefined;
+      console.log(`🤖 Agent Router → Using agent: ${agent} (sidebar: ${activeFeature || 'none'})${futuresIntent ? ` [futures intent: ${futuresIntent}]` : ''}`);
+
+      // ── 2. Build live prices context ──────────────────────────────────
       let pricesBlock = 'PRICES UNAVAILABLE';
       try {
         const coinIds = 'bitcoin,ethereum,solana,binancecoin,cardano,avalanche-2,chainlink,polkadot,tether,usd-coin,ripple';
@@ -114,14 +96,14 @@ export function useGroqChat(apiKey: string, onActionDetected?: (action: string, 
         }
       } catch (err) { console.error(err); }
 
-      // 2. Sentiment Context
+      // ── 3. Build sentiment context ────────────────────────────────────
       let sentimentBlock = 'SENTIMENT: N/A';
       if (sentimentContext?.fearGreed && sentimentContext.fearGreed.length > 0) {
         const f = sentimentContext.fearGreed;
         sentimentBlock = `CURRENT MARKET SENTIMENT:\nFear & Greed Index: ${f[0].value}/100 — ${f[0].value_classification}\nYesterday: ${f[1]?.value || 'N/A'}\nLast Week: ${f[6]?.value || 'N/A'}`;
       }
 
-      // 3. News Context
+      // ── 4. Build news context ─────────────────────────────────────────
       const coinKeywords: Record<string, string[]> = { 'BTC': ['btc', 'bitcoin'], 'ETH': ['eth', 'ethereum'], 'BNB': ['bnb', 'binance'], 'SOL': ['sol', 'solana'] };
       const msgLower = content.toLowerCase();
       let detectedCoin: string | null = null;
@@ -131,45 +113,54 @@ export function useGroqChat(apiKey: string, onActionDetected?: (action: string, 
       if (sentimentContext?.news && sentimentContext.news.length > 0) {
         let relevantNews = sentimentContext.news;
         if (detectedCoin) {
-          relevantNews = sentimentContext.news.filter(n => n.title.toLowerCase().includes(detectedCoin!.toLowerCase()));
+          relevantNews = sentimentContext.news.filter((n: any) => n.title.toLowerCase().includes(detectedCoin!.toLowerCase()));
         } else {
           const black = ['amd', 'samsung', 'senator', 'politics'];
-          relevantNews = sentimentContext.news.filter(n => !black.some(b => n.title.toLowerCase().includes(b)));
+          relevantNews = sentimentContext.news.filter((n: any) => !black.some(b => n.title.toLowerCase().includes(b)));
         }
         if (relevantNews.length > 0) {
-          newsBlock = `RELEVANT NEWS HEADLINES ${detectedCoin ? `FOR ${detectedCoin}` : '(GENERAL)'}:\n${relevantNews.slice(0, 5).map((n, i) => `${i + 1}. ${n.title}`).join('\n')}`;
+          newsBlock = `RELEVANT NEWS HEADLINES ${detectedCoin ? `FOR ${detectedCoin}` : '(GENERAL)'}:\n${relevantNews.slice(0, 5).map((n: any, i: number) => `${i + 1}. ${n.title}`).join('\n')}`;
         }
       }
 
-      // 4. User context (NOW INCLUDING CONTACTS)
+      // ── 5. Build user context block ───────────────────────────────────
       const holdings = walletContext?.address ? walletContext.holdings.map(h => `${h.amount} ${h.symbol}`).join(', ') : 'None';
-      const contacts = walletContext?.contacts ? Object.entries(walletContext.contacts).map(([n, a]) => `${n}: ${a}`).join(', ') : 'Empty';
+      const contactsStr = walletContext?.contacts ? Object.entries(walletContext.contacts).map(([n, a]) => `${n}: ${a}`).join(', ') : 'Empty';
       
-      const userContext = `USER CONTEXT:
+      const userContextBlock = `USER CONTEXT:
 Address: ${walletContext?.address || 'Not connected'}
 Holdings: ${holdings}
-ADDRESS BOOK: ${contacts}
+ADDRESS BOOK: ${contactsStr}
 Watchlist: ${walletContext?.watchlist?.join(', ') || 'Empty'}
 
 PAPER FUTURES POSITIONS:
 ${!futuresContext || futuresContext.positions.length === 0 ? 'No open positions' : 
-  futuresContext.positions.map(p => 
+  futuresContext.positions.map((p: any) => 
     `${p.direction.toUpperCase()} ${p.coin} ${p.leverage}x | Entry: $${p.entryPrice} | Size: $${p.size} | Liq: $${p.liquidationPrice}`
   ).join('\n')}
 
 Virtual Balance: $${futuresContext?.balance || '1000'}`;
 
-      const dynamicSystemMessage = `
-[LIVE DATA]
-${pricesBlock}
-${sentimentBlock}
-${newsBlock}
+      // ── 6. Build the agent-specific system prompt ─────────────────────
+      const agentContext: AgentContext = {
+        pricesBlock,
+        sentimentBlock,
+        newsBlock,
+        userContextBlock,
+        walletAddress: walletContext?.address,
+        holdings,
+        contacts: contactsStr,
+        watchlistIds: walletContext?.watchlist,
+        txHistory: walletContext?.history,
+        futuresPositions: futuresContext?.positions,
+        futuresBalance: futuresContext?.balance,
+        chartAnalysisResults: chartAnalysisResults || null,
+        futuresIntent,
+      };
 
-${userContext}
+      const systemPrompt = buildAgentPrompt(agent, agentContext);
 
-STRICT: To SEND or SWAP, you MUST include the [[ACTION:TYPE|...]] block. Check the ADDRESS BOOK for recipient addresses.
-`;
-
+      // ── 7. Send to Groq ───────────────────────────────────────────────
       try {
         const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
           method: 'POST',
@@ -177,13 +168,12 @@ STRICT: To SEND or SWAP, you MUST include the [[ACTION:TYPE|...]] block. Check t
           body: JSON.stringify({
             model: 'llama-3.3-70b-versatile',
             messages: [
-              { role: 'system', content: SYSTEM_PROMPT },
-              { role: 'system', content: dynamicSystemMessage },
+              { role: 'system', content: systemPrompt },
               ...messages.slice(-10).map(m => ({ role: m.role, content: m.content })),
               { role: 'user', content: content.trim() }
             ],
-            temperature: 0.5,
-            max_tokens: 600
+            temperature: agent === 'WALLET' || agent === 'FUTURES' ? 0.3 : 0.5,
+            max_tokens: agent === 'CHART_ANALYSIS' || agent === 'PORTFOLIO' ? 800 : 600
           })
         });
 
@@ -220,7 +210,8 @@ STRICT: To SEND or SWAP, you MUST include the [[ACTION:TYPE|...]] block. Check t
 
   const clearMessages = useCallback(() => {
     setMessages([{ id: 'reset', role: 'assistant', content: "Chat cleared. Ask me anything!", timestamp: new Date() }]);
+    setLastAgent(null);
   }, []);
 
-  return { messages, isLoading, sendMessage, addSystemMessage, clearMessages };
+  return { messages, isLoading, sendMessage, addSystemMessage, clearMessages, lastAgent };
 }

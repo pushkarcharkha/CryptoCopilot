@@ -14,6 +14,7 @@ import { useTransactionHistory } from './hooks/useTransactionHistory';
 import { useWatchlist } from './hooks/useWatchlist';
 import { useNews } from './hooks/useNews';
 import { useFutures, SUPPORTED_FUTURES_COINS } from './hooks/useFutures';
+import ChartModal from './components/ChartModal';
 import type { RightPanelView, SidebarFeature, TraderSignal, TransactionPreview, SwapPreview, CoinGeckoCoin } from './types';
 import { ethers } from 'ethers';
 
@@ -29,6 +30,7 @@ function App() {
   const [swapPreview, setSwapPreview] = useState<SwapPreview | null>(null);
   const [cryptoPanicToken, setCryptoPanicToken] = useState<string>(() => localStorage.getItem('cryptopanic_token') || '');
   const [manualPanelOverride, setManualPanelOverride] = useState<RightPanelView | null>(null);
+  const [watchlistCoin, setWatchlistCoin] = useState<CoinGeckoCoin | null>(null);
   
   // Use ref to break circular dependency with useGroqChat
   const addSystemMessageRef = useRef<((content: string) => void) | null>(null);
@@ -131,6 +133,17 @@ function App() {
         toggleWatchlist(coinId);
         addSystemMessageProxy(`🗑️ Removed **${coinId}** from your watchlist.`);
       }
+    } else if (action === 'ANALYZE_CHART') {
+      const coinId = params.coinId || 'bitcoin';
+      const coin = allCoins.find(c => c.id === coinId || c.symbol === coinId.toLowerCase());
+      if (coin) {
+        setActiveCoin(coin);
+        setRightPanelView('coin-chart');
+        setManualPanelOverride('coin-chart');
+        addSystemMessageProxy(`🔍 Analyzing **${coin.name}** chart...`);
+      } else {
+        addSystemMessageProxy(`❌ Sorry, I couldn't find a chart for **${coinId}** to analyze.`);
+      }
     } else if (action === 'SHOW_CHART') {
       const { coinId } = params;
       if (coinId) {
@@ -192,11 +205,50 @@ function App() {
     }
   }, [wallet.networkName, wallet.address, getSwapQuote, addSystemMessageProxy, toggleWatchlist, allCoins, manualPanelOverride, setPanelSafe, prices, openPosition, closePosition, futuresPositions, getLivePnL]);
 
-  const { messages, isLoading, sendMessage, addSystemMessage, clearMessages } = useGroqChat(apiKey, handleAIAction);
+  const { messages, isLoading, sendMessage, addSystemMessage, clearMessages, lastAgent } = useGroqChat(apiKey, handleAIAction);
   
   useEffect(() => {
     addSystemMessageRef.current = addSystemMessage;
   }, [addSystemMessage]);
+
+  const handleAnalysisComplete = useCallback((stats: any) => {
+    // Hidden message to the AI to trigger the formatted analysis response
+    const statsMessage = `Chart analysis complete for ${stats.coinSymbol}. 
+Here are the EXACT values I calculated and drew on the chart:
+
+Current Price: $${stats.currentPrice.toLocaleString()}
+Support Level: $${stats.support.toLocaleString()} (drawn as green line)
+Resistance Level: $${stats.resistance.toLocaleString()} (drawn as red line)  
+Trendline: $${stats.trendline ? '$' + stats.trendline.toLocaleString() : 'not detected'}
+EMA 20: $${stats.ema20.toLocaleString()} (yellow line)
+EMA 50: $${stats.ema50.toLocaleString()} (purple line)
+EMA Cross: ${stats.ema20 > stats.ema50 ? 'EMA20 above EMA50 — Bullish' : 'EMA20 below EMA50 — Bearish'}
+Buy Signals detected: ${stats.buySignals}
+Sell Signals detected: ${stats.sellSignals}
+
+Using ONLY these exact numbers give a professional trading analysis. Include:
+- Where price is relative to support and resistance
+- What the EMA cross means
+- Suggested entry zone, target and stop loss
+- Overall trend direction
+- Risk level`;
+    
+    // Use the ref because we don't want sendMessage to be a dependency (circular)
+    // Actually, we can just call sendMessage from the hook since we have it here
+    sendMessage(statsMessage, {
+      address: wallet.address,
+      holdings: wallet.holdings,
+      contacts: contacts,
+      history: history,
+      watchlist: watchlistIds
+    }, {
+      fearGreed: fearGreedData,
+      news: newsData
+    }, {
+      balance: futuresBalance,
+      positions: futuresPositions
+    }, 'chart', stats);
+  }, [sendMessage, wallet, contacts, history, watchlistIds, fearGreedData, newsData, futuresBalance, futuresPositions]);
 
   // Handle sidebar feature click → preset message + panel update
   const handleFeatureClick = useCallback(
@@ -224,7 +276,7 @@ function App() {
       if (feature === 'portfolio') {
         setRightPanelView('portfolio');
         setManualPanelOverride('portfolio');
-        sendMessage(message, walletCtx, sentimentCtx, futuresCtx);
+        sendMessage(message, walletCtx, sentimentCtx, futuresCtx, feature);
       } else if (feature === 'wallet') {
         setRightPanelView('contacts');
         setManualPanelOverride('contacts');
@@ -232,17 +284,17 @@ function App() {
       } else if (feature === 'watchlist') {
         setRightPanelView('watchlist');
         setManualPanelOverride('watchlist');
-        sendMessage(message, walletCtx, sentimentCtx, futuresCtx);
+        sendMessage(message, walletCtx, sentimentCtx, futuresCtx, feature);
       } else if (feature === 'chart') {
         const btc = allCoins.find(c => c.symbol === 'btc') || allCoins[0];
         if (btc) setActiveCoin(btc);
         setRightPanelView('coin-chart');
         setManualPanelOverride('coin-chart');
-        sendMessage(message, walletCtx, sentimentCtx, futuresCtx);
+        sendMessage(message, walletCtx, sentimentCtx, futuresCtx, feature);
       } else if (feature === 'journal') {
         setRightPanelView('history');
         setManualPanelOverride('history');
-        sendMessage(message, walletCtx, sentimentCtx, futuresCtx);
+        sendMessage(message, walletCtx, sentimentCtx, futuresCtx, feature);
       } else if (feature === 'news-sentiment') {
         setRightPanelView('news-sentiment');
         setManualPanelOverride('news-sentiment');
@@ -254,7 +306,7 @@ function App() {
       } else {
         setRightPanelView('prices');
         setManualPanelOverride('prices');
-        sendMessage(message, walletCtx, sentimentCtx, futuresCtx);
+        sendMessage(message, walletCtx, sentimentCtx, futuresCtx, feature);
       }
     },
     [sendMessage, addSystemMessage, wallet.address, wallet.holdings, contacts, history, watchlistIds, allCoins, fearGreedData, newsData, futuresBalance, futuresPositions]
@@ -488,9 +540,9 @@ function App() {
       }, {
         balance: futuresBalance,
         positions: futuresPositions
-      });
+      }, activeFeature);
     },
-    [sendMessage, addContact, removeContact, contacts, wallet.address, wallet.holdings, history, watchlistIds, fearGreedData, newsData, futuresBalance, futuresPositions]
+    [sendMessage, addContact, removeContact, contacts, wallet.address, wallet.holdings, history, watchlistIds, fearGreedData, newsData, futuresBalance, futuresPositions, activeFeature]
   );
 
   const handleConnectWallet = useCallback(() => {
@@ -525,7 +577,7 @@ function App() {
     }, {
       balance: futuresBalance,
       positions: futuresPositions
-    });
+    }, activeFeature);
   };
 
   return (
@@ -593,11 +645,11 @@ function App() {
           watchlistLoading={watchlistLoading}
           watchlistLastUpdated={watchlistLastUpdated}
           onCoinClick={(coin) => {
-            setActiveCoin(coin);
-            setRightPanelView('coin-chart');
+            setWatchlistCoin(coin);
           }}
           onBackToWatchlist={() => setRightPanelView('watchlist')}
           activeCoin={activeCoin}
+          onAnalysisComplete={handleAnalysisComplete}
           newsData={newsData}
           panicNewsData={panicNewsData}
           fearGreedData={fearGreedData}
@@ -617,6 +669,13 @@ function App() {
           futuresPrices={futuresPricesMap}
         />
       </div>
+
+      {watchlistCoin && (
+        <ChartModal 
+          coin={watchlistCoin} 
+          onClose={() => setWatchlistCoin(null)} 
+        />
+      )}
 
       {/* Settings Modal */}
       {settingsOpen && (

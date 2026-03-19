@@ -9,6 +9,7 @@ import {
 import type { CryptoPrice, RightPanelView, WalletState, TransactionPreview, SwapPreview, AppTransaction, CoinGeckoCoin, NewsArticle, FearGreedData, FuturesPosition } from '../types';
 import NewsSentimentPanel from './NewsSentimentPanel';
 import FuturesPanel from './FuturesPanel';
+import { TechnicalAnalysisChart } from './TechnicalAnalysisChart';
 
 interface RightPanelProps {
   view: RightPanelView;
@@ -33,6 +34,7 @@ interface RightPanelProps {
   onCoinClick?: (coin: CoinGeckoCoin) => void;
   onBackToWatchlist?: () => void;
   activeCoin?: CoinGeckoCoin | null;
+  onAnalysisComplete?: (stats: any) => void;
   newsData?: NewsArticle[];
   panicNewsData?: NewsArticle[];
   fearGreedData?: FearGreedData[];
@@ -57,8 +59,6 @@ function formatChange(n: number | null | undefined) {
   if (n === null || n === undefined) return '0.00%';
   return `${n >= 0 ? '+' : ''}${n.toFixed(2)}%`;
 }
-
-
 
 const Sparkline = ({ data, color }: { data: number[]; color: string }) => {
   if (!data || data.length === 0) return null;
@@ -88,63 +88,6 @@ const Sparkline = ({ data, color }: { data: number[]; color: string }) => {
   );
 };
 
-const TradingViewWidget = ({ symbol }: { symbol: string }) => {
-  const containerId = "tradingview_chart";
-  const [isExpanded, setIsExpanded] = React.useState(false);
-  
-  React.useEffect(() => {
-    const timer = setTimeout(() => {
-      if ((window as any).TradingView && document.getElementById(containerId)) {
-        new (window as any).TradingView.widget({
-          container_id: containerId,
-          symbol: `BINANCE:${symbol.toUpperCase()}USDT`,
-          interval: "1H",
-          timezone: "Etc/UTC",
-          theme: "dark",
-          style: "1",
-          locale: "en",
-          toolbar_bg: "#111111",
-          enable_publishing: false,
-          hide_top_toolbar: false,
-          hide_legend: false,
-          save_image: false,
-          height: isExpanded ? 600 : 400,
-          width: "100%",
-          hide_side_toolbar: false,
-          allow_symbol_change: true,
-          studies: []
-        });
-      }
-    }, 100);
-    return () => clearTimeout(timer);
-  }, [symbol, isExpanded]);
-
-  return (
-    <div style={{ position: 'relative' }}>
-      <button
-        onClick={() => setIsExpanded(!isExpanded)}
-        style={{
-          position: 'absolute',
-          top: '10px',
-          right: '10px',
-          zIndex: 10,
-          background: 'rgba(0,0,0,0.6)',
-          border: '1px solid rgba(255,255,255,0.2)',
-          color: '#fff',
-          borderRadius: '4px',
-          padding: '4px 8px',
-          fontSize: '10px',
-          cursor: 'pointer',
-          backdropFilter: 'blur(4px)'
-        }}
-      >
-        {isExpanded ? 'Shrink' : 'Expand'}
-      </button>
-      <div id={containerId} style={{ height: isExpanded ? '600px' : '400px', width: '100%', borderRadius: '12px', overflow: 'hidden' }} />
-    </div>
-  );
-};
-
 const RightPanel: React.FC<RightPanelProps> = ({
   view,
   prices,
@@ -157,7 +100,6 @@ const RightPanel: React.FC<RightPanelProps> = ({
   onContactDeleteClick,
   onConfirmTransactionClick,
   onConfirmSwapClick,
-  onSwitchNetwork,
   history = [],
   allCoins = [],
   watchlistCoins = [],
@@ -168,189 +110,96 @@ const RightPanel: React.FC<RightPanelProps> = ({
   onCoinClick,
   onBackToWatchlist,
   activeCoin,
+  onAnalysisComplete,
   newsData = [],
   panicNewsData = [],
   fearGreedData = [],
-  newsLoading = false,
-  newsError = null,
-  newsLastUpdated = null,
-  cryptoPanicToken = '',
-  futuresBalance = 0,
-  futuresPositions = [],
+  newsLoading,
+  futuresBalance,
+  futuresPositions,
   onCloseFuturesPosition,
-  futuresPrices = null,
+  futuresPrices,
 }) => {
-  const [historyFilter, setHistoryFilter] = React.useState<'all' | 'send' | 'swap' | 'week' | 'month'>('all');
-  const [watchlistTab, setWatchlistTab] = React.useState<'my' | 'all'>('my');
   const [searchQuery, setSearchQuery] = React.useState('');
+  const [watchlistTab, setWatchlistTab] = React.useState<'my' | 'all'>('my');
 
-  // Use real wallet holdings
-  const holdings = wallet.isConnected ? wallet.holdings : [];
-
-  // Map prices to calculate total value
-  const holdingsWithValues = holdings.map(h => {
-    const coinPrice = prices.find(p => p.symbol.toLowerCase() === h.symbol.toLowerCase());
-    const valueUsd = coinPrice ? h.amount * coinPrice.price : 0;
-    return { ...h, valueUsd };
+  const holdingsWithValues = (wallet.holdings || []).map((h) => {
+    const priceObj = prices.find((p) => p.symbol.toLowerCase() === h.symbol.toLowerCase());
+    const val = priceObj ? h.amount * priceObj.price : 0;
+    return { ...h, valueUsd: val };
   });
 
   const totalPortfolioValue = holdingsWithValues.reduce((sum, h) => sum + h.valueUsd, 0);
 
-
-
   // History Filtering Logic
   const filteredHistory = history.filter(tx => {
-    if (historyFilter === 'all') return true;
-    if (historyFilter === 'send') return tx.type === 'send';
-    if (historyFilter === 'swap') return tx.type === 'swap';
-    
-    const txDate = new Date(tx.timestamp);
-    const now = new Date();
-    if (historyFilter === 'week') {
-      const oneWeekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-      return txDate >= oneWeekAgo;
-    }
-    if (historyFilter === 'month') {
-      const oneMonthAgo = new Date(now.getFullYear(), now.getMonth() - 1, now.getDate());
-      return txDate >= oneMonthAgo;
-    }
-    return true;
+    if (searchQuery === '') return true;
+    const q = searchQuery.toLowerCase();
+    return (
+      tx.fromToken.toLowerCase().includes(q) ||
+      (tx.toToken && tx.toToken.toLowerCase().includes(q)) ||
+      (tx.contactName && tx.contactName.toLowerCase().includes(q)) ||
+      (tx.toAddress && tx.toAddress.toLowerCase().includes(q))
+    );
   });
-
 
   return (
     <div
+      className="right-panel-container"
       style={{
-        width: '320px',
-        flexShrink: 0,
+        width: '400px',
         background: 'var(--bg-panel)',
         borderLeft: '1px solid var(--border-subtle)',
         display: 'flex',
         flexDirection: 'column',
         overflow: 'hidden',
+        position: 'relative',
+        zIndex: 5,
       }}
     >
-      {/* Panel Header */}
-      <div
-        style={{
-          padding: '14px 16px',
-          borderBottom: '1px solid var(--border-subtle)',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '8px',
-          flexShrink: 0,
-        }}
-      >
-        <div
-          style={{
-            width: '6px',
-            height: '6px',
-            borderRadius: '50%',
-            background: '#00d4ff',
-            boxShadow: '0 0 8px #00d4ff',
-          }}
-        />
-        <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-          {view === 'watchlist' && 'Watchlist'}
-          {view === 'contacts' && 'Address Book'}
-          {view === 'history' && 'Trade Journal'}
-          {view === 'news-sentiment' && 'News & Sentiment'}
-          {view === 'futures' && 'Paper Futures Trading'}
-          {view === 'coin-chart' && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <button 
-                onClick={onBackToWatchlist}
-                style={{ background: 'none', border: 'none', color: 'var(--accent-cyan)', cursor: 'pointer', padding: 0, fontSize: '14px' }}
-              >
-                ←
-              </button>
-              {activeCoin?.name || 'Chart'}
-            </div>
-          )}
-        </span>
-        <span style={{ marginLeft: 'auto', fontSize: '10px', color: 'var(--text-muted)', fontFamily: 'JetBrains Mono, monospace' }}>
-          {new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
-        </span>
-      </div>
-
-      {/* Panel Content */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: '12px' }}>
-
+      <div style={{ flex: 1, overflowY: 'auto', padding: '16px' }}>
         {/* ===== PRICES VIEW ===== */}
         {view === 'prices' && (
           <div className="panel-content fade-in">
-            <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '12px', display: 'flex', justifyContent: 'space-between' }}>
-              <span>Asset</span>
-              <span>Price / 24h</span>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <h2 style={{ fontSize: '18px', fontWeight: 700, color: '#e2e8f0', margin: 0 }}>Markets</h2>
+              <div style={{ fontSize: '10px', color: 'var(--text-muted)', background: 'rgba(255,255,255,0.05)', padding: '4px 8px', borderRadius: '4px' }}>
+                LIVE
+              </div>
             </div>
-            {pricesLoading
-              ? [1, 2, 3].map((i) => (
-                  <div key={i} style={{ marginBottom: '10px' }}>
-                    <div className="skeleton" style={{ height: '68px', borderRadius: '12px' }} />
-                  </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              {pricesLoading && prices.length === 0 ? (
+                [1, 2, 3, 4, 5].map(i => (
+                  <div key={i} className="skeleton" style={{ height: '64px', borderRadius: '12px' }} />
                 ))
-              : prices.map((coin) => (
-                  <div key={coin.id} className="glass-card" style={{ padding: '14px', marginBottom: '10px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                      <div
-                        className="coin-icon"
-                        style={{ background: `${coin.color}22`, color: coin.color, border: `1px solid ${coin.color}44` }}
-                      >
-                        {coin.icon}
-                      </div>
+              ) : (
+                prices.map((coin) => (
+                  <div key={coin.id} className="glass-card market-row" style={{ padding: '12px 16px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                      <span style={{ fontSize: '20px' }}>{coin.icon}</span>
                       <div style={{ flex: 1 }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                           <span style={{ fontWeight: 600, fontSize: '14px' }}>{coin.symbol}</span>
-                          <span
-                            style={{
-                              fontFamily: 'JetBrains Mono, monospace',
-                              fontSize: '14px',
-                              fontWeight: 600,
-                              color: '#e2e8f0',
-                            }}
-                          >
+                          <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: '14px', color: '#00d4ff' }}>
                             {formatPrice(coin.price)}
                           </span>
                         </div>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '2px' }}>
                           <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{coin.name}</span>
-                          <span
-                            className={coin.change24h >= 0 ? 'positive' : 'negative'}
-                            style={{ fontSize: '12px', fontWeight: 600, fontFamily: 'JetBrains Mono, monospace' }}
-                          >
+                          <span style={{ 
+                            fontSize: '11px', 
+                            fontWeight: 600,
+                            color: coin.change24h >= 0 ? '#10b981' : '#ef4444' 
+                          }}>
                             {formatChange(coin.change24h)}
                           </span>
                         </div>
                       </div>
                     </div>
                   </div>
-                ))}
-
-            {/* Market pulse */}
-            <div
-              style={{
-                marginTop: '8px',
-                padding: '12px',
-                background: 'rgba(0,212,255,0.04)',
-                border: '1px solid rgba(0,212,255,0.1)',
-                borderRadius: '10px',
-              }}
-            >
-              <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '8px', fontWeight: 600 }}>
-                📡 MARKET PULSE
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                {[
-                  { label: 'Fear & Greed', value: '68 — Greed', color: '#f7931a' },
-                  { label: 'BTC Dominance', value: '54.2%', color: '#00d4ff' },
-                  { label: 'Total Mkt Cap', value: '$2.84T', color: '#00ff88' },
-                ].map((item) => (
-                  <div key={item.label} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px' }}>
-                    <span style={{ color: 'var(--text-secondary)' }}>{item.label}</span>
-                    <span style={{ color: item.color, fontWeight: 600, fontFamily: 'JetBrains Mono, monospace' }}>{item.value}</span>
-                  </div>
-                ))}
-              </div>
+                ))
+              )}
             </div>
           </div>
         )}
@@ -358,75 +207,29 @@ const RightPanel: React.FC<RightPanelProps> = ({
         {/* ===== PORTFOLIO VIEW ===== */}
         {view === 'portfolio' && (
           <div className="panel-content fade-in">
-            {/* Portfolio overview card */}
-            {wallet.isConnected && (
-              <div
-                className="glass-card"
-                style={{ padding: '14px', marginBottom: '12px', border: '1px solid rgba(0,255,136,0.2)' }}
-              >
-                <div style={{ fontSize: '11px', color: '#00ff88', fontWeight: 600, marginBottom: '6px' }}>
-                   CONNECTED WALLET ({wallet.networkName || 'Unknown Network'})
-                </div>
-                <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: '11px', color: 'var(--text-muted)', marginBottom: '8px' }}>
-                  {wallet.address?.slice(0, 10)}...{wallet.address?.slice(-10)}
-                </div>
-                <div style={{ fontSize: '20px', fontWeight: 700, color: holdings[0]?.color || '#627eea', display: 'flex', alignItems: 'baseline', gap: '6px', marginBottom: '10px' }}>
-                  {wallet.ethBalance} <span style={{ fontSize: '14px', opacity: 0.8 }}>{holdings[0]?.symbol || 'ETH'}</span>
-                </div>
-
-                {/* Network Switch Help */}
-                {(wallet.networkName?.includes('Ethereum') || wallet.networkName?.includes('Mainnet')) && (
-                  <button
-                    onClick={() => onSwitchNetwork?.(56)}
-                    style={{
-                      width: '100%',
-                      padding: '8px',
-                      background: 'rgba(243, 186, 47, 0.1)',
-                      border: '1px solid rgba(243, 186, 47, 0.3)',
-                      borderRadius: '8px',
-                      color: '#f3ba2f',
-                      fontSize: '11px',
-                      fontWeight: 600,
-                      cursor: 'pointer',
-                      transition: 'all 0.2s',
-                    }}
-                    onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(243, 186, 47, 0.2)'}
-                    onMouseLeave={(e) => e.currentTarget.style.background = 'rgba(243, 186, 47, 0.1)'}
-                  >
-                    Switch to BNB Smart Chain →
-                  </button>
-                )}
-              </div>
-            )}
-
-            {/* Pie chart */}
-            <div style={{ height: '160px', minHeight: '160px', marginBottom: '12px', position: 'relative' }}>
+            <h2 style={{ fontSize: '18px', fontWeight: 700, color: '#e2e8f0', marginBottom: '20px' }}>Portfolio</h2>
+            
+            <div style={{ height: '220px', position: 'relative', marginBottom: '20px' }}>
               {holdingsWithValues.length > 0 ? (
-                <ResponsiveContainer width="100%" height="100%" minHeight={160}>
+                <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
                     <Pie
                       data={holdingsWithValues}
-                      dataKey="valueUsd"
-                      nameKey="symbol"
                       cx="50%"
                       cy="50%"
-                      innerRadius={45}
-                      outerRadius={70}
-                      paddingAngle={3}
-                      animationDuration={500}
+                      innerRadius={60}
+                      outerRadius={80}
+                      paddingAngle={5}
+                      dataKey="valueUsd"
                     >
-                      {holdingsWithValues.map((entry) => (
-                        <Cell key={entry.symbol} fill={entry.color} />
+                      {holdingsWithValues.map((entry, index) => (
+                        <Cell key={`cell-${index}`} fill={entry.color} stroke="none" />
                       ))}
                     </Pie>
-                    <Tooltip
-                      formatter={(v: any) => [`$${Number(v).toLocaleString()}`, 'Value']}
-                      contentStyle={{
-                        background: 'rgba(26,26,46,0.95)',
-                        border: '1px solid rgba(0,212,255,0.2)',
-                        borderRadius: '8px',
-                        fontSize: '12px',
-                      }}
+                    <Tooltip 
+                      contentStyle={{ background: '#1a1a2e', border: '1px solid var(--border-subtle)', borderRadius: '8px', fontSize: '12px' }} 
+                      itemStyle={{ color: '#fff' }}
+                      formatter={(val: any) => `$${Number(val).toLocaleString()}`}
                     />
                   </PieChart>
                 </ResponsiveContainer>
@@ -499,46 +302,39 @@ const RightPanel: React.FC<RightPanelProps> = ({
                 </div>
               </div>
 
-              <TradingViewWidget symbol={activeCoin.symbol} />
-            </div>
+              <div style={{ height: '420px', borderRadius: '12px', overflow: 'hidden', border: '1px solid rgba(255,255,255,0.05)', marginBottom: '16px' }}>
+                <TechnicalAnalysisChart 
+                  coinId={activeCoin.id} 
+                  coinSymbol={activeCoin.symbol}
+                  onAnalysisComplete={onAnalysisComplete}
+                />
+              </div>
 
-            <div style={{ display: 'flex', gap: '8px', marginBottom: '16px' }}>
-              {['1H', '4H', '1D', '1W'].map(tf => (
-                <button
-                  key={tf}
-                  style={{
-                    flex: 1,
-                    padding: '6px',
-                    borderRadius: '8px',
-                    background: tf === '1H' ? 'rgba(0, 212, 255, 0.1)' : 'rgba(255, 255, 255, 0.05)',
-                    border: `1px solid ${tf === '1H' ? 'rgba(0, 212, 255, 0.2)' : 'transparent'}`,
-                    color: tf === '1H' ? 'var(--accent-cyan)' : 'var(--text-muted)',
-                    fontSize: '11px',
-                    fontWeight: 600,
-                    cursor: 'pointer'
-                  }}
-                >
-                  {tf}
-                </button>
-              ))}
-            </div>
+              <button 
+                onClick={onBackToWatchlist}
+                className="btn-secondary"
+                style={{ width: '100%', marginBottom: '12px' }}
+              >
+                ← Back to Watchlist
+              </button>
 
-            <button
-              onClick={() => onToggleWatchlist?.(activeCoin.id)}
-              style={{
-                width: '100%',
-                padding: '12px',
-                borderRadius: '10px',
-                background: isInWatchlist?.(activeCoin.id) ? 'rgba(239, 68, 68, 0.1)' : 'rgba(16, 185, 129, 0.1)',
-                border: `1px solid ${isInWatchlist?.(activeCoin.id) ? 'rgba(239, 68, 68, 0.2)' : 'rgba(16, 185, 129, 0.2)'}`,
-                color: isInWatchlist?.(activeCoin.id) ? '#ef4444' : '#10b981',
-                fontWeight: 600,
-                fontSize: '13px',
-                cursor: 'pointer'
-              }}
-            >
-              {isInWatchlist?.(activeCoin.id) ? '✕ Remove from Watchlist' : '+ Add to Watchlist'}
-            </button>
+              <button
+                onClick={() => onToggleWatchlist?.(activeCoin.id)}
+                style={{
+                  width: '100%',
+                  padding: '12px',
+                  borderRadius: '10px',
+                  background: (activeCoin && isInWatchlist?.(activeCoin.id)) ? 'rgba(239, 68, 68, 0.1)' : 'rgba(16, 185, 129, 0.1)',
+                  border: `1px solid ${(activeCoin && isInWatchlist?.(activeCoin.id)) ? 'rgba(239, 68, 68, 0.2)' : 'rgba(16, 185, 129, 0.2)'}`,
+                  color: (activeCoin && isInWatchlist?.(activeCoin.id)) ? '#ef4444' : '#10b981',
+                  fontWeight: 600,
+                  fontSize: '13px',
+                  cursor: 'pointer'
+                }}
+              >
+                {(activeCoin && isInWatchlist?.(activeCoin.id)) ? '✕ Remove from Watchlist' : '+ Add to Watchlist'}
+              </button>
+            </div>
           </div>
         )}
 
@@ -638,6 +434,7 @@ const RightPanel: React.FC<RightPanelProps> = ({
                   style={{
                     display: 'flex',
                     justifyContent: 'space-between',
+                    alignItems: 'center',
                     padding: '8px 0',
                     borderBottom: '1px solid var(--border-subtle)',
                     fontSize: '13px',
@@ -653,10 +450,10 @@ const RightPanel: React.FC<RightPanelProps> = ({
                   marginTop: '12px',
                   width: '100%',
                   padding: '10px',
-                  background: 'linear-gradient(135deg, rgba(139,92,246,0.3), rgba(0,212,255,0.2))',
-                  border: '1px solid rgba(139,92,246,0.4)',
+                  background: 'linear-gradient(135deg, rgba(139,92,246,0.2), rgba(0,212,255,0.2))',
+                  border: '1px solid rgba(139,92,246,0.3)',
                   borderRadius: '10px',
-                  color: '#a78bfa',
+                  color: '#8b5cf6',
                   fontWeight: 600,
                   fontSize: '13px',
                   cursor: 'pointer',
@@ -669,40 +466,92 @@ const RightPanel: React.FC<RightPanelProps> = ({
                 Confirm Swap →
               </button>
             </div>
-            <p style={{ fontSize: '11px', color: 'var(--text-muted)', textAlign: 'center', padding: '0 10px' }}>
-              Swaps are executed through PancakeSwap V2 on BNB Chain. Final amount may vary slightly based on price impact.
-            </p>
+            <div
+              style={{
+                padding: '12px',
+                background: 'rgba(139,92,246,0.05)',
+                border: '1px solid rgba(139,92,246,0.15)',
+                borderRadius: '10px',
+                fontSize: '12px',
+                color: '#8b5cf6',
+              }}
+            >
+              ⚠️ Swaps are executed via PancakeSwap v3 on BNB Smart Chain.
+            </div>
           </div>
         )}
 
+        {/* ===== CONTACTS VIEW ===== */}
+        {view === 'contacts' && (
+          <div className="panel-content fade-in">
+            <h2 style={{ fontSize: '18px', fontWeight: 700, color: '#e2e8f0', marginBottom: '16px' }}>Address Book</h2>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              {Object.keys(contacts).length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--text-muted)' }}>
+                  <div style={{ fontSize: '32px', marginBottom: '12px' }}>👤</div>
+                  <div style={{ fontSize: '14px' }}>No contacts saved yet.</div>
+                  <div style={{ fontSize: '11px', marginTop: '4px' }}>Say "add [name] [address]" to save one.</div>
+                </div>
+              ) : (
+                Object.entries(contacts).map(([name, address]) => (
+                  <div key={address} className="glass-card" style={{ padding: '12px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <div>
+                        <div style={{ fontWeight: 600, fontSize: '14px', color: '#e2e8f0' }}>{name}</div>
+                        <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontFamily: 'JetBrains Mono, monospace', marginTop: '2px' }}>
+                          {address.slice(0, 10)}...{address.slice(-8)}
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', gap: '8px' }}>
+                        <button 
+                          onClick={() => onContactSendClick?.(name)}
+                          style={{ padding: '6px', borderRadius: '6px', background: 'rgba(0,212,255,0.1)', border: 'none', cursor: 'pointer', color: 'var(--accent-cyan)' }}
+                          title="Send to this contact"
+                        >
+                          💸
+                        </button>
+                        <button 
+                          onClick={() => onContactDeleteClick?.(name)}
+                          style={{ padding: '6px', borderRadius: '6px', background: 'rgba(239,68,68,0.1)', border: 'none', cursor: 'pointer', color: '#ef4444' }}
+                          title="Delete contact"
+                        >
+                          🗑️
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        )}
 
         {/* ===== WATCHLIST VIEW ===== */}
         {view === 'watchlist' && (
-          <div className="panel-content fade-in" style={{ display: 'flex', flexDirection: 'column', height: '100%', padding: '0 12px 12px' }}>
-            {/* Search Bar */}
-            <div style={{ padding: '12px 0 8px', position: 'sticky', top: 0, background: 'var(--bg-panel)', zIndex: 10 }}>
-              <div className="glass-card" style={{ padding: '8px 12px', display: 'flex', alignItems: 'center', gap: '8px', borderColor: 'rgba(255,255,255,0.1)' }}>
-                <span style={{ fontSize: '14px' }}>🔍</span>
-                <input
-                  type="text"
-                  placeholder="Search coins..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  style={{
-                    background: 'none',
-                    border: 'none',
-                    color: '#fff',
-                    fontSize: '13px',
-                    width: '100%',
-                    outline: 'none',
-                    fontFamily: 'Inter, sans-serif'
-                  }}
-                />
-              </div>
+          <div className="panel-content fade-in" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+            <h2 style={{ fontSize: '18px', fontWeight: 700, color: '#e2e8f0', marginBottom: '16px' }}>Watchlist</h2>
+            
+            <div style={{ marginBottom: '16px', position: 'relative' }}>
+              <input 
+                type="text" 
+                placeholder="Search assets..." 
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                style={{
+                  width: '100%',
+                  padding: '10px 12px 10px 36px',
+                  borderRadius: '10px',
+                  background: 'rgba(255,255,255,0.03)',
+                  border: '1px solid var(--border-subtle)',
+                  color: '#fff',
+                  fontSize: '13px',
+                  outline: 'none'
+                }}
+              />
+              <span style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }}>🔍</span>
             </div>
 
-            {/* Tabs */}
-            <div style={{ display: 'flex', gap: '8px', marginBottom: '12px', background: 'rgba(255,255,255,0.03)', padding: '4px', borderRadius: '10px' }}>
+            <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
               <button
                 onClick={() => setWatchlistTab('my')}
                 style={{
@@ -718,7 +567,7 @@ const RightPanel: React.FC<RightPanelProps> = ({
                   transition: 'all 0.2s'
                 }}
               >
-                My Watchlist
+                My Portfolio
               </button>
               <button
                 onClick={() => setWatchlistTab('all')}
@@ -788,32 +637,18 @@ const RightPanel: React.FC<RightPanelProps> = ({
                           </span>
                           <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
                             <span style={{ fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: '#e2e8f0' }}>
-                              {formatPrice(coin.current_price)}
+                              ${coin.current_price.toLocaleString()}
                             </span>
-                            <span style={{ fontSize: '10px', fontWeight: 600, color: (coin.price_change_percentage_24h || 0) >= 0 ? '#10b981' : '#ef4444' }}>
+                            <span style={{ 
+                              fontSize: '10px', 
+                              fontWeight: 700,
+                              color: coin.price_change_percentage_24h >= 0 ? '#10b981' : '#ef4444'
+                            }}>
                               {formatChange(coin.price_change_percentage_24h)}
                             </span>
                           </div>
                         </div>
                       </div>
-
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onToggleWatchlist?.(coin.id);
-                        }}
-                        style={{
-                          background: isInWatchlist?.(coin.id) ? 'rgba(239, 68, 68, 0.1)' : 'rgba(0, 212, 255, 0.1)',
-                          border: 'none',
-                          borderRadius: '6px',
-                          color: isInWatchlist?.(coin.id) ? '#ef4444' : '#00d4ff',
-                          padding: '4px 8px',
-                          fontSize: '10px',
-                          cursor: 'pointer'
-                        }}
-                      >
-                        {isInWatchlist?.(coin.id) ? '✕' : '+'}
-                      </button>
                     </div>
                   ))
               )}
@@ -821,176 +656,71 @@ const RightPanel: React.FC<RightPanelProps> = ({
           </div>
         )}
 
-        {/* ===== FUTURES VIEW ===== */}
-        {view === 'futures' && (
-          <FuturesPanel
-            balance={futuresBalance}
-            positions={futuresPositions}
-            prices={futuresPrices}
-            onClosePosition={onCloseFuturesPosition || (() => {})}
-          />
-        )}
-
-        {/* ===== NEWS & SENTIMENT VIEW ===== */}
+        {/* ===== NEWS VIEW ===== */}
         {view === 'news-sentiment' && (
-          <NewsSentimentPanel
-            fearGreed={fearGreedData}
-            coinGeckoNews={newsData}
-            cryptoPanicNews={panicNewsData}
+          <NewsSentimentPanel 
+            newsData={newsData} 
+            panicNewsData={panicNewsData}
+            fearGreedData={fearGreedData}
             isLoading={newsLoading}
-            error={newsError}
-            lastUpdated={newsLastUpdated}
-            cryptoPanicToken={cryptoPanicToken}
           />
         )}
-
-        {/* ===== CONTACTS VIEW ===== */}
-        {view === 'contacts' && (
-          <div className="panel-content fade-in">
-            <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '12px', display: 'flex', justifyContent: 'space-between' }}>
-              <span>Saved Contacts</span>
-              <span>{contacts ? Object.keys(contacts).length : 0}</span>
-            </div>
-            
-            {!contacts || Object.keys(contacts).length === 0 ? (
-              <div style={{ color: 'var(--text-muted)', fontSize: '13px', textAlign: 'center', padding: '40px 0' }}>
-                No contacts saved yet. Say "add [name] [address]" to add one.
-              </div>
-            ) : (
-              Object.entries(contacts).map(([name, address]) => (
-                <div key={name} className="glass-card" style={{ padding: '14px', marginBottom: '10px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                    <span style={{ fontWeight: 600, fontSize: '15px', color: '#e2e8f0', textTransform: 'capitalize' }}>
-                      {name}
-                    </span>
-                    <div style={{ display: 'flex', gap: '6px' }}>
-                      <button
-                        onClick={() => {
-                          navigator.clipboard.writeText(address);
-                        }}
-                        style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent-cyan)', fontSize: '12px' }}
-                        title="Copy Address"
-                      >
-                        📋
-                      </button>
-                      <button
-                        onClick={() => onContactDeleteClick?.(name)}
-                        style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent-red)', fontSize: '12px' }}
-                        title="Delete Contact"
-                      >
-                        🗑️
-                      </button>
-                    </div>
-                  </div>
-                  
-                  <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: '12px', color: 'var(--text-muted)', padding: '6px', background: 'rgba(0,0,0,0.3)', borderRadius: '6px', marginBottom: '10px', wordBreak: 'break-all' }}>
-                    {address}
-                  </div>
-                  
-                  <button
-                    onClick={() => onContactSendClick?.(name)}
-                    style={{
-                      width: '100%',
-                      padding: '8px',
-                      background: 'rgba(0, 212, 255, 0.1)',
-                      border: '1px solid rgba(0, 212, 255, 0.2)',
-                      borderRadius: '8px',
-                      color: '#00d4ff',
-                      fontSize: '12px',
-                      fontWeight: 600,
-                      cursor: 'pointer',
-                      transition: 'all 0.2s',
-                    }}
-                    onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(0, 212, 255, 0.2)'}
-                    onMouseLeave={(e) => e.currentTarget.style.background = 'rgba(0, 212, 255, 0.1)'}
-                  >
-                    Send to {name.charAt(0).toUpperCase() + name.slice(1)} →
-                  </button>
-                </div>
-              ))
-            )}
-          </div>
-        )}
-
-
 
         {/* ===== HISTORY VIEW ===== */}
         {view === 'history' && (
-          <div className="panel-content fade-in" style={{ paddingBottom: '20px' }}>
-            <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span>Transaction History</span>
-              <span style={{ background: 'rgba(0, 212, 255, 0.1)', color: 'var(--accent-cyan)', padding: '2px 8px', borderRadius: '10px' }}>
-                {filteredHistory.length}
-              </span>
-            </div>
-
-            {/* Filter Pills */}
-            <div style={{ display: 'flex', gap: '6px', marginBottom: '16px', overflowX: 'auto', paddingBottom: '4px', scrollbarWidth: 'none' }}>
-              {[
-                { id: 'all', label: 'All' },
-                { id: 'send', label: 'Sends' },
-                { id: 'swap', label: 'Swaps' },
-                { id: 'week', label: 'This Week' },
-                { id: 'month', label: 'This Month' },
-              ].map(f => (
-                <button
-                  key={f.id}
-                  onClick={() => setHistoryFilter(f.id as any)}
-                  style={{
-                    padding: '4px 10px',
-                    borderRadius: '8px',
-                    fontSize: '11px',
-                    whiteSpace: 'nowrap',
-                    background: historyFilter === f.id ? 'rgba(0, 212, 255, 0.2)' : 'rgba(255, 255, 255, 0.05)',
-                    border: `1px solid ${historyFilter === f.id ? 'rgba(0, 212, 255, 0.4)' : 'transparent'}`,
-                    color: historyFilter === f.id ? 'var(--accent-cyan)' : 'var(--text-muted)',
-                    cursor: 'pointer',
-                    transition: 'all 0.2s',
-                    fontWeight: historyFilter === f.id ? 600 : 400
-                  }}
-                >
-                  {f.label}
-                </button>
-              ))}
+          <div className="panel-content fade-in">
+            <h2 style={{ fontSize: '18px', fontWeight: 700, color: '#e2e8f0', marginBottom: '16px' }}>Journal</h2>
+            
+            <div style={{ marginBottom: '16px', position: 'relative' }}>
+              <input 
+                type="text" 
+                placeholder="Search history..." 
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                style={{
+                  width: '100%',
+                  padding: '10px 12px 10px 36px',
+                  borderRadius: '10px',
+                  background: 'rgba(255,255,255,0.03)',
+                  border: '1px solid var(--border-subtle)',
+                  color: '#fff',
+                  fontSize: '13px',
+                  outline: 'none'
+                }}
+              />
+              <span style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }}>🔍</span>
             </div>
 
             {filteredHistory.length === 0 ? (
-              <div style={{ textAlign: 'center', padding: '60px 20px', color: 'var(--text-muted)' }}>
-                <div style={{ fontSize: '32px', marginBottom: '16px' }}>📓</div>
-                <p style={{ fontSize: '13px' }}>{history.length === 0 ? "No transactions yet. Start by sending crypto or making a swap." : "No transactions match this filter."}</p>
+              <div style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--text-muted)' }}>
+                <div style={{ fontSize: '32px', marginBottom: '12px' }}>📖</div>
+                <div style={{ fontSize: '14px' }}>No trades recorded.</div>
+                <div style={{ fontSize: '11px', marginTop: '4px' }}>Every transfer or swap will appear here.</div>
               </div>
             ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                {filteredHistory.map((tx) => (
-                  <div key={tx.id || tx.hash} className="glass-card" style={{ padding: '14px', position: 'relative', overflow: 'hidden' }}>
-                    {/* Status indicator line */}
-                    <div style={{ 
-                      position: 'absolute', 
-                      left: 0, 
-                      top: 0, 
-                      bottom: 0, 
-                      width: '3px', 
-                      background: tx.status === 'success' ? '#10b981' : tx.status === 'failed' ? '#ef4444' : '#f59e0b' 
-                    }} />
-
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '10px' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                {filteredHistory.sort((a, b) => b.timestamp - a.timestamp).map((tx) => (
+                  <div key={tx.id || tx.hash} className="glass-card" style={{ padding: '12px', borderLeft: `3px solid ${tx.status === 'success' ? '#10b981' : tx.status === 'failed' ? '#ef4444' : '#f59e0b'}` }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                      <div style={{ display: 'flex', gap: '10px' }}>
                         <div style={{ 
                           width: '32px', 
                           height: '32px', 
                           borderRadius: '8px', 
-                          background: tx.type === 'send' ? 'rgba(239, 68, 68, 0.1)' : tx.type === 'swap' ? 'rgba(0, 212, 255, 0.1)' : 'rgba(16, 185, 129, 0.1)',
-                          color: tx.type === 'send' ? '#ef4444' : tx.type === 'swap' ? '#00d4ff' : '#10b981',
+                          background: tx.type === 'send' ? 'rgba(0, 212, 255, 0.1)' : tx.type === 'swap' ? 'rgba(139, 92, 246, 0.1)' : 'rgba(16, 185, 129, 0.1)',
                           display: 'flex',
                           alignItems: 'center',
                           justifyContent: 'center',
-                          fontSize: '16px'
+                          fontSize: '14px'
                         }}>
-                          {tx.type === 'send' ? '↑' : tx.type === 'swap' ? '⇄' : '↓'}
+                          {tx.type === 'send' ? '💸' : tx.type === 'swap' ? '🔄' : '💰'}
                         </div>
                         <div>
-                          <div style={{ fontWeight: 600, fontSize: '14px', color: '#e2e8f0' }}>
-                            {tx.type === 'send' ? `Send ${tx.fromAmount} ${tx.fromToken}` : tx.type === 'swap' ? `Swap ${tx.fromAmount} ${tx.fromToken}` : `Receive ${tx.fromAmount} ${tx.fromToken}`}
+                          <div style={{ fontSize: '13px', fontWeight: 600, color: '#e2e8f0' }}>
+                            {tx.type === 'send' ? 'Sent Funds' : tx.type === 'swap' ? 'Swapped Assets' : 'Received Funds'}
+                          </div>
+                          <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: '12px', color: 'var(--accent-cyan)', marginTop: '2px' }}>
+                            {tx.fromAmount} {tx.fromToken}
                           </div>
                           <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
                             {tx.type === 'send' ? `To: ${tx.contactName || tx.toAddress?.slice(0, 6) + '...' + tx.toAddress?.slice(-4)}` : tx.type === 'swap' ? `For: ${tx.toAmount} ${tx.toToken}` : `From: ${tx.toAddress?.slice(0, 6) + '...' + tx.toAddress?.slice(-4)}`}
@@ -1028,6 +758,16 @@ const RightPanel: React.FC<RightPanelProps> = ({
               </div>
             )}
           </div>
+        )}
+
+        {/* ===== FUTURES VIEW ===== */}
+        {view === 'futures' && (
+          <FuturesPanel 
+            balance={futuresBalance || 1000} 
+            positions={futuresPositions || []} 
+            onClosePosition={onCloseFuturesPosition || (() => {})} 
+            prices={futuresPrices || {}}
+          />
         )}
       </div>
 

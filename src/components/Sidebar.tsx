@@ -51,12 +51,7 @@ const FEATURES: {
     label: 'Futures',
     message: 'You\'re in paper futures mode. You can open long or short positions with leverage. This is simulated — no real money involved. Try saying \'open a long BTC position with 10x leverage for $100\'',
   },
-  {
-    id: 'debate',
-    icon: '⚔️',
-    label: 'Debate Mode',
-    message: 'Let\'s debate: Is Bitcoin still the ultimate store of value or is Ethereum a better long-term bet? Give me both sides.',
-  },
+
   {
     id: 'journal',
     icon: '📓',

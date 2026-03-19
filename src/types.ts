@@ -140,7 +140,6 @@ export type SidebarFeature =
   | 'watchlist'
   | 'chart'
   | 'morning'
-  | 'debate'
   | 'journal'
   | 'news-sentiment'
   | 'futures';
