@@ -54,7 +54,7 @@ export function useCryptoPrices(coinIds: string[] = ['bitcoin', 'ethereum', 'sol
 
   useEffect(() => {
     fetchPrices();
-    const interval = setInterval(fetchPrices, 60000);
+    const interval = setInterval(fetchPrices, 120000); // 2 minutes to avoid 429s
     return () => clearInterval(interval);
   }, []);
 

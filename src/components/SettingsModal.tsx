@@ -2,16 +2,19 @@ import React, { useState } from 'react';
 
 interface SettingsModalProps {
   apiKey: string;
-  onSave: (groqKey: string) => void;
+  cryptoPanicToken: string;
+  onSave: (groqKey: string, cryptoPanicKey: string) => void;
   onClose: () => void;
 }
 
-const SettingsModal: React.FC<SettingsModalProps> = ({ apiKey, onSave, onClose }) => {
+const SettingsModal: React.FC<SettingsModalProps> = ({ apiKey, cryptoPanicToken, onSave, onClose }) => {
   const [keyInput, setKeyInput] = useState(apiKey);
+  const [panicTokenInput, setPanicTokenInput] = useState(cryptoPanicToken);
   const [showKey, setShowKey] = useState(false);
+  const [showPanicKey, setShowPanicKey] = useState(false);
 
   const handleSave = () => {
-    onSave(keyInput.trim());
+    onSave(keyInput.trim(), panicTokenInput.trim());
     onClose();
   };
 
@@ -140,6 +143,65 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ apiKey, onSave, onClose }
               console.groq.com
             </a>
             . The key is stored locally in your browser only.
+          </p>
+        </div>
+
+        {/* CryptoPanic Token Section */}
+        <div style={{ marginBottom: '20px' }}>
+          <label style={{ fontSize: '13px', fontWeight: 600, color: '#94a3b8', display: 'block', marginBottom: '8px' }}>
+            🗞️ CryptoPanic API Token
+          </label>
+          <div style={{ position: 'relative' }}>
+            <input
+              id="cryptopanic-token-input"
+              type={showPanicKey ? 'text' : 'password'}
+              value={panicTokenInput}
+              onChange={(e) => setPanicTokenInput(e.target.value)}
+              placeholder="API Token..."
+              style={{
+                width: '100%',
+                background: 'rgba(0,0,0,0.3)',
+                border: '1px solid var(--border-subtle)',
+                borderRadius: '10px',
+                padding: '12px 44px 12px 14px',
+                color: '#e2e8f0',
+                fontSize: '13px',
+                fontFamily: 'JetBrains Mono, monospace',
+                outline: 'none',
+                transition: 'border-color 0.2s',
+                boxSizing: 'border-box',
+              }}
+              onFocus={(e) => (e.target.style.borderColor = 'rgba(243, 186, 47, 0.4)')}
+              onBlur={(e) => (e.target.style.borderColor = 'var(--border-subtle)')}
+            />
+            <button
+              onClick={() => setShowPanicKey(!showPanicKey)}
+              style={{
+                position: 'absolute',
+                right: '12px',
+                top: '50%',
+                transform: 'translateY(-50%)',
+                background: 'none',
+                border: 'none',
+                cursor: 'pointer',
+                color: 'var(--text-muted)',
+                fontSize: '16px',
+              }}
+            >
+              {showPanicKey ? '🙈' : '👁️'}
+            </button>
+          </div>
+          <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '8px' }}>
+            Get a free token at{' '}
+            <a
+              href="https://cryptopanic.com/developers/api/"
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ color: '#f3ba2f', textDecoration: 'none' }}
+            >
+              cryptopanic.com
+            </a>
+            . Used for sentiment-tagged news and coin alerts.
           </p>
         </div>
 

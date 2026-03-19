@@ -11,6 +11,16 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api\/coingecko/, ''),
       },
+      '/api/cryptopanic': {
+        target: 'https://cryptopanic.com/api',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api\/cryptopanic/, ''),
+      },
+      '/api/cryptocompare': {
+        target: 'https://min-api.cryptocompare.com',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api\/cryptocompare/, ''),
+      },
     },
   },
 })

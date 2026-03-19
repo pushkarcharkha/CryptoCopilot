@@ -32,7 +32,8 @@ export type RightPanelView =
   | 'swap'
   | 'watchlist'
   | 'contacts'
-  | 'history';
+  | 'history'
+  | 'news-sentiment';
 
 export interface AppTransaction {
   id: string;
@@ -120,4 +121,42 @@ export type SidebarFeature =
   | 'chart'
   | 'morning'
   | 'debate'
-  | 'journal';
+  | 'journal'
+  | 'news-sentiment';
+
+export interface NewsArticle {
+  title: string;
+  description?: string;
+  url: string;
+  thumb_2x?: string;
+  image?: string;
+  created_at?: string;
+  published_at?: string;
+  author?: string;
+  source?: {
+    name: string;
+    domain?: string;
+  };
+  votes?: {
+    negative: number;
+    positive: number;
+    important: number;
+    liked: number;
+    disliked: number;
+    saved: number;
+    comments: number;
+  };
+  currencies?: {
+    code: string;
+    title: string;
+    slug: string;
+    url: string;
+  }[];
+}
+
+export interface FearGreedData {
+  value: string;
+  value_classification: string;
+  timestamp: string;
+  time_until_update?: string;
+}

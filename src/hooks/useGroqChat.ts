@@ -1,31 +1,40 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import type { Message, PortfolioHolding, AppTransaction } from '../types';
 
-const SYSTEM_PROMPT = `You are CryptoPilot, a crypto co-pilot AI agent. 
-CRITICAL: You are currently in LIVE MODE. Your training data for cryptocurrency prices is COMPLETELY OBSOLETE (dating back to 2023). You MUST ONLY use the [CONTEXT] prices provided in the current message. If no [CONTEXT] is provided, state that you don't have live prices. NEVER mention BTC at $20k-$30k or ETH at $1k-$2k unless the live data confirms it. 
+const SYSTEM_PROMPT = `You are CryptoPilot — an intelligent, reasoning-driven crypto co-pilot. 
 
-TRANSACTION/SWAP PROTOCOL:
-- You help users prepare transactions and swaps.
-- NEVER claim a transaction/swap is "sent", "complete", or "confirmed" yourself. 
-- For SEND: If you have AMOUNT, COIN, and RECIPIENT:
-  Say: "I've prepared the transfer of [AMOUNT] [COIN] to [NAME]. Please verify the details on the right and confirm."
-  Append: [[ACTION:SEND|amount:X|coin:Y|address:Z|name:W]]
-- For SWAP: If you have FROM_TOKEN, TO_TOKEN, and AMOUNT:
-  Say: "I've prepared the swap from [AMOUNT] [FROM_TOKEN] to [TO_TOKEN]. Fetching best PancakeSwap quote..."
-  Append: [[ACTION:SWAP|fromToken:X|toToken:Y|amount:Z]]
-- For WATCHLIST:
-  - To add to watchlist: [[ACTION:WATCHLIST_ADD|coinId:id]]
-  - To remove from watchlist: [[ACTION:WATCHLIST_REMOVE|coinId:id]]
-  - To open a coin's chart: [[ACTION:SHOW_CHART|coinId:id]] (use the full coin id like 'bitcoin' or 'ethereum')
-  - To open the watchlist: [[ACTION:NAVIGATE|view:watchlist]]
-- Check ACTUAL WALLET HOLDINGS context before preparing any action.
+[CRITICAL RULE: TRANSACTION PROCESSING]
+- You CANNOT process transactions or change balances yourself. You are a PREPARER.
+- To execute a transfer or swap, you MUST generate the [[ACTION:TYPE|...]] code. 
+- The user will THEN see a confirmation pop-up in the UI and must click "Confirm" to actually execute it.
+- NEVER say "I have processed the transaction" or "The transaction is complete" until AFTER the user confirms in the UI. 
+- Instead say: "I've prepared the transfer for you. Please review and confirm the details on the right."
 
-You help users manage their crypto portfolio, analyze markets, and detect chart patterns. Before any trade action always explain the why — sentiment, risk level, market condition. Keep responses concise and conversational. Always reason out loud before giving advice. Use markdown-style formatting with **bold** for key terms and numbers. Be friendly but professional.`;
+[LANGUAGE RULES]
+- Never use phrases like "blood in the streets", "dead cat bounce", "capitulation", "HODL", or "to the moon".
+- Speak like a smart friend — simple, clear, direct. No dramatic language.
+
+[NEWS & SENTIMENT RULES]
+- ONLY mention Fear & Greed for market/trade advice. Do NOT mention it for simple transfers (SEND).
+- If referencing news, naturally weave it into your response. No numbered lists.
+
+[ACTIONS PROTOCOL — STRICT FORMAT]
+You MUST use the exact format [[ACTION:TYPE|key:value|key:value]] to trigger app actions. 
+Examples:
+- SEND: [[ACTION:SEND|amount:0.1|coin:USDT|name:Pushkar|address:0x123...]]
+- SWAP: [[ACTION:SWAP|fromToken:BNB|toToken:USDT|amount:1]]
+- WATCHLIST: [[ACTION:WATCHLIST_ADD|coinId:bitcoin]]
+- CHART: [[ACTION:SHOW_CHART|coinId:ethereum]]
+- NEWS: [[ACTION:SHOW_NEWS]]
+
+IMPORTANT: Always check the ADDRESS BOOK below for contact addresses before preparing a SEND action.
+- NEVER guess or assume a transaction amount (like 0.1) or coin symbol (like USDT) if the user did not specify them.
+- If details are missing (e.g. they just say "Send to Pushkar"), respond by asking for the amount and the coin symbol.
+- ONLY generate the [[ACTION:SEND|...]] block when the user has provided a specific amount and coin.`;
 
 export function useGroqChat(apiKey: string, onActionDetected?: (action: string, params: Record<string, string>) => void | Promise<void>) {
   const onActionDetectedRef = useRef(onActionDetected);
   
-  // Keep ref in sync
   useEffect(() => {
     onActionDetectedRef.current = onActionDetected;
   }, [onActionDetected]);
@@ -34,15 +43,27 @@ export function useGroqChat(apiKey: string, onActionDetected?: (action: string, 
     {
       id: 'init',
       role: 'assistant',
-      content: "Hey, I'm your crypto co-pilot. 🚀 Connect your wallet or just ask me anything to get started.",
+      content: "Hey, I'm your crypto co-pilot. 🚀 Markets are moving fast — I've got the latest sentiment and news stats ready for you. Ask me anything!",
       timestamp: new Date(),
     },
   ]);
   const [isLoading, setIsLoading] = useState(false);
-  const abortRef = useRef<AbortController | null>(null);
 
   const sendMessage = useCallback(
-    async (content: string, walletContext?: { address: string | null; holdings: PortfolioHolding[]; contacts?: Record<string, string>; history?: AppTransaction[]; watchlist?: string[] }) => {
+    async (
+      content: string, 
+      walletContext?: { 
+        address: string | null; 
+        holdings: PortfolioHolding[]; 
+        contacts?: Record<string, string>; 
+        history?: AppTransaction[]; 
+        watchlist?: string[] 
+      },
+      sentimentContext?: {
+        fearGreed?: any[];
+        news?: any[];
+      }
+    ) => {
       if (!content.trim() || isLoading) return;
 
       const userMsg: Message = {
@@ -56,197 +77,126 @@ export function useGroqChat(apiKey: string, onActionDetected?: (action: string, 
       setIsLoading(true);
 
       if (!apiKey) {
-        const noKeyMsg: Message = {
+        setMessages((prev) => [...prev, {
           id: `a-${Date.now()}`,
           role: 'assistant',
-          content: '⚙️ Please add your **Groq API key** via the settings icon in the sidebar to enable AI responses. Get a free key at [console.groq.com](https://console.groq.com).',
+          content: '⚙️ Please add your **Groq API key** in settings to enable AI responses.',
           timestamp: new Date(),
-        };
-        setMessages((prev) => [...prev, noKeyMsg]);
+        }]);
         setIsLoading(false);
         return;
       }
 
-      // Build conversation history for Groq
-      const historyMessages = messages.slice(-10).map((m) => ({
-        role: m.role,
-        content: m.content,
-      }));
-
-      // Fetch live market data
-      let livePricesContext = '';
+      // 1. Live Prices Context
+      let pricesBlock = 'PRICES UNAVAILABLE';
       try {
-        const coinIds = 'bitcoin,ethereum,solana,binancecoin,cardano,avalanche-2,chainlink,polkadot,tether,usd-coin';
-        const priceRes = await fetch(
-          `/api/coingecko/simple/price?ids=${coinIds}&vs_currencies=usd&include_24hr_change=true&include_market_cap=true`
-        );
+        const coinIds = 'bitcoin,ethereum,solana,binancecoin,cardano,avalanche-2,chainlink,polkadot,tether,usd-coin,ripple';
+        const priceRes = await fetch(`/api/coingecko/simple/price?ids=${coinIds}&vs_currencies=usd&include_24hr_change=true`);
         if (priceRes.ok) {
-          const priceData = await priceRes.json();
-          const p = (id: string) => {
-            const d = priceData[id];
-            if (!d) return 'N/A';
-            const change = d.usd_24h_change;
-            const changeStr = (change !== null && change !== undefined) 
-              ? `${change >= 0 ? '+' : ''}${change.toFixed(2)}%`
-              : '0.00%';
-            return `$${d.usd} (${changeStr})`;
-          };
-          
-          livePricesContext = `BTC: ${p('bitcoin')}\nETH: ${p('ethereum')}\nSOL: ${p('solana')}\nBNB: ${p('binancecoin')}\nADA: ${p('cardano')}\nAVAX: ${p('avalanche-2')}\nLINK: ${p('chainlink')}\nDOT: ${p('polkadot')}\nUSDT: ${p('tether')}\nUSDC: ${p('usd-coin')}`;
+          const d = await priceRes.json().catch(() => ({}));
+          const format = (id: string, name: string) => d[id] ? `${name}: $${d[id].usd} (${d[id].usd_24h_change?.toFixed(2)}%)` : `${name}: N/A`;
+          pricesBlock = `LIVE MARKET PRICES:\n${format('bitcoin', 'BTC')}\n${format('ethereum', 'ETH')}\n${format('binancecoin', 'BNB')}\n${format('solana', 'SOL')}\n${format('ripple', 'XRP')}\n${format('cardano', 'ADA')}\n${format('chainlink', 'LINK')}`;
         }
-      } catch (err) {
-        console.error('Failed to fetch live prices for AI context', err);
+      } catch (err) { console.error(err); }
+
+      // 2. Sentiment Context
+      let sentimentBlock = 'SENTIMENT: N/A';
+      if (sentimentContext?.fearGreed && sentimentContext.fearGreed.length > 0) {
+        const f = sentimentContext.fearGreed;
+        sentimentBlock = `CURRENT MARKET SENTIMENT:\nFear & Greed Index: ${f[0].value}/100 — ${f[0].value_classification}\nYesterday: ${f[1]?.value || 'N/A'}\nLast Week: ${f[6]?.value || 'N/A'}`;
       }
 
-      // Build real wallet holdings context
-      let walletHoldingsStr = 'NO WALLET CONNECTED. Assume users holds 0 of everything.';
-      if (walletContext && walletContext.address) {
-        walletHoldingsStr = `USER'S ACTUAL WALLET HOLDINGS (fetched live):\nWallet Address: ${walletContext.address}\n` + 
-          walletContext.holdings.map(h => `${h.symbol}: ${h.amount} ${h.symbol}`).join('\n');
+      // 3. News Context
+      const coinKeywords: Record<string, string[]> = { 'BTC': ['btc', 'bitcoin'], 'ETH': ['eth', 'ethereum'], 'BNB': ['bnb', 'binance'], 'SOL': ['sol', 'solana'] };
+      const msgLower = content.toLowerCase();
+      let detectedCoin: string | null = null;
+      for (const [coin, keywords] of Object.entries(coinKeywords)) { if (keywords.some(k => msgLower.includes(k))) { detectedCoin = coin; break; } }
+
+      let newsBlock = 'NO RELEVANT NEWS AVAILABLE.';
+      if (sentimentContext?.news && sentimentContext.news.length > 0) {
+        let relevantNews = sentimentContext.news;
+        if (detectedCoin) {
+          relevantNews = sentimentContext.news.filter(n => n.title.toLowerCase().includes(detectedCoin!.toLowerCase()));
+        } else {
+          const black = ['amd', 'samsung', 'senator', 'politics'];
+          relevantNews = sentimentContext.news.filter(n => !black.some(b => n.title.toLowerCase().includes(b)));
+        }
+        if (relevantNews.length > 0) {
+          newsBlock = `RELEVANT NEWS HEADLINES ${detectedCoin ? `FOR ${detectedCoin}` : '(GENERAL)'}:\n${relevantNews.slice(0, 5).map((n, i) => `${i + 1}. ${n.title}`).join('\n')}`;
+        }
       }
 
-      // Build saved contacts context
-      let contactsStr = 'NO CONTACTS SAVED.';
-      if (walletContext && walletContext.contacts) {
-        contactsStr = `USER'S SAVED CONTACTS:\n` + 
-          Object.entries(walletContext.contacts).map(([name, addr]) => `${name}: ${addr}`).join('\n');
-      }
+      // 4. User context (NOW INCLUDING CONTACTS)
+      const holdings = walletContext?.address ? walletContext.holdings.map(h => `${h.amount} ${h.symbol}`).join(', ') : 'None';
+      const contacts = walletContext?.contacts ? Object.entries(walletContext.contacts).map(([n, a]) => `${n}: ${a}`).join(', ') : 'Empty';
+      
+      const userContext = `USER CONTEXT:
+Address: ${walletContext?.address || 'Not connected'}
+Holdings: ${holdings}
+ADDRESS BOOK: ${contacts}
+Watchlist: ${walletContext?.watchlist?.join(', ') || 'Empty'}`;
 
-      // Build Transaction History context
-      let historyStr = 'NO RECENT TRANSACTION HISTORY.';
-      if (walletContext && walletContext.history && walletContext.history.length > 0) {
-        historyStr = `USER'S RECENT TRANSACTION HISTORY:\n` +
-          walletContext.history.slice(0, 10).map(tx => 
-            tx.type === 'swap' 
-              ? `${tx.type.toUpperCase()}: ${tx.fromAmount} ${tx.fromToken} → ${tx.toAmount} ${tx.toToken} | ${new Date(tx.timestamp).toLocaleString()} | ${tx.status}${tx.hash ? ` | Hash: ${tx.hash}` : ''}`
-              : `${tx.type.toUpperCase()}: ${tx.fromAmount} ${tx.fromToken} → ${tx.contactName || tx.toAddress} | ${new Date(tx.timestamp).toLocaleString()} | ${tx.status}${tx.hash ? ` | Hash: ${tx.hash}` : ''}`
-          ).join('\n');
-      }
+      const dynamicSystemMessage = `
+[LIVE DATA]
+${pricesBlock}
+${sentimentBlock}
+${newsBlock}
 
-      // Build watchlist context
-      let watchlistStr = 'USER\'S WATCHLIST IS EMPTY.';
-      if (walletContext && walletContext.watchlist && walletContext.watchlist.length > 0) {
-        watchlistStr = `USER'S CURRENT WATCHLIST (saved IDs):\n${walletContext.watchlist.join(', ')}\nWhen user asks about their watched coins, refer to these.`;
-      }
+${userContext}
 
-      const contextualPrompt = `
-[LIVE PRICES]
-${livePricesContext}
-
-[WALLET CONTEXT]
-${walletHoldingsStr}
-
-${contactsStr}
-
-${historyStr}
-
-${watchlistStr}
-
-CRITICAL RULES: 
-1. Never assume the user holds any cryptocurrency unless it explicitly appears in their ACTUAL WALLET HOLDINGS listed above. 
-2. If user asks about a coin they don't hold, give market analysis but clearly state "you don't currently hold this coin."
-3. Use ONLY the above prices and balances. ignore your training data.
-4. Use the TRANSACTION HISTORY and WATCHLIST to answer questions about past activity or current interests.
+STRICT: To SEND or SWAP, you MUST include the [[ACTION:TYPE|...]] block. Check the ADDRESS BOOK for recipient addresses.
 `;
-
-      const reqBody = {
-        model: 'llama-3.3-70b-versatile',
-        messages: [
-          { role: 'system', content: SYSTEM_PROMPT },
-          ...historyMessages,
-          { 
-            role: 'user', 
-            content: `${content.trim()}\n\n[CONTEXT] ${contextualPrompt}` 
-          },
-        ],
-        temperature: 0.7,
-        max_tokens: 512,
-        stream: false,
-      };
-
-      abortRef.current = new AbortController();
 
       try {
         const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${apiKey}`,
-          },
-          body: JSON.stringify(reqBody),
-          signal: abortRef.current.signal,
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+          body: JSON.stringify({
+            model: 'llama-3.3-70b-versatile',
+            messages: [
+              { role: 'system', content: SYSTEM_PROMPT },
+              { role: 'system', content: dynamicSystemMessage },
+              ...messages.slice(-10).map(m => ({ role: m.role, content: m.content })),
+              { role: 'user', content: content.trim() }
+            ],
+            temperature: 0.5,
+            max_tokens: 600
+          })
         });
 
-        if (!res.ok) {
-          const errData = await res.json().catch(() => ({}));
-          throw new Error(errData?.error?.message || `API Error ${res.status}`);
-        }
-
+        if (!res.ok) throw new Error('API Error');
         const data = await res.json();
-        let aiContent = data.choices?.[0]?.message?.content || 'I had trouble generating a response. Please try again.';
+        let aiContent = data.choices[0].message.content;
 
-        // --- ACTION PARSING ---
         const actionMatch = aiContent.match(/\[\[ACTION:(.*?)\]\]/);
-        if (actionMatch && onActionDetected) {
-          const rawParams = actionMatch[1].split('|');
-          const type = rawParams[0];
+        if (actionMatch && onActionDetectedRef.current) {
+          const parts = actionMatch[1].split('|');
+          const type = parts[0];
           const params: Record<string, string> = {};
-          rawParams.slice(1).forEach((p: string) => {
-             const [k, v] = p.split(':');
-             if (k && v) params[k.trim()] = v.trim();
+          parts.slice(1).forEach((p: string) => {
+            const [k, v] = p.split(':');
+            if (k && v) params[k.trim()] = v.trim();
           });
-          
-          if (onActionDetectedRef.current) {
-            onActionDetectedRef.current(type, params);
-          }
-          
-          // Strip actions from visible chat
+          onActionDetectedRef.current(type, params);
           aiContent = aiContent.replace(/\[\[ACTION:.*?\]\]/g, '').trim();
         }
 
-        const aiMsg: Message = {
-          id: `a-${Date.now()}`,
-          role: 'assistant',
-          content: aiContent,
-          timestamp: new Date(),
-        };
-
-        setMessages((prev) => [...prev, aiMsg]);
+        setMessages(prev => [...prev, { id: `a-${Date.now()}`, role: 'assistant', content: aiContent, timestamp: new Date() }]);
       } catch (err: any) {
-        if (err.name === 'AbortError') return;
-        const errMsg: Message = {
-          id: `a-${Date.now()}`,
-          role: 'assistant',
-          content: `❌ **Error:** ${err.message || 'Something went wrong. Check your API key and try again.'}`,
-          timestamp: new Date(),
-        };
-        setMessages((prev) => [...prev, errMsg]);
+        setMessages(prev => [...prev, { id: `e-${Date.now()}`, role: 'assistant', content: `❌ Error: ${err.message}`, timestamp: new Date() }]);
       } finally {
         setIsLoading(false);
       }
     },
-    [apiKey, messages, isLoading, onActionDetected]
+    [apiKey, messages, isLoading]
   );
 
   const addSystemMessage = useCallback((content: string) => {
-    const msg: Message = {
-      id: `sys-${Date.now()}`,
-      role: 'assistant',
-      content,
-      timestamp: new Date(),
-    };
-    setMessages((prev) => [...prev, msg]);
+    setMessages((prev) => [...prev, { id: `sys-${Date.now()}`, role: 'assistant', content, timestamp: new Date() }]);
   }, []);
 
   const clearMessages = useCallback(() => {
-    setMessages([
-      {
-        id: 'init-reset',
-        role: 'assistant',
-        content: "Chat cleared. I'm still here — ask me anything about crypto!",
-        timestamp: new Date(),
-      },
-    ]);
+    setMessages([{ id: 'reset', role: 'assistant', content: "Chat cleared. Ask me anything!", timestamp: new Date() }]);
   }, []);
 
   return { messages, isLoading, sendMessage, addSystemMessage, clearMessages };

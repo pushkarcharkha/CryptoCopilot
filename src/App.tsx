@@ -6,12 +6,13 @@ import RightPanel from './components/RightPanel';
 import SignalFeed from './components/SignalFeed';
 import SettingsModal from './components/SettingsModal';
 import { useGroqChat } from './hooks/useGroqChat';
-import { useWallet } from './hooks/useWallet';
+import { useWallet, TOKEN_ADDRESSES } from './hooks/useWallet';
 import { useCryptoPrices, useCoinChart } from './hooks/useCrypto';
 import { useContacts } from './hooks/useContacts';
-import { usePancakeSwap, BNB_TOKENS } from './hooks/usePancakeSwap';
+import { usePancakeSwap, BNB_TOKENS, WBNB } from './hooks/usePancakeSwap';
 import { useTransactionHistory } from './hooks/useTransactionHistory';
 import { useWatchlist } from './hooks/useWatchlist';
+import { useNews } from './hooks/useNews';
 import type { RightPanelView, SidebarFeature, TraderSignal, TransactionPreview, SwapPreview, CoinGeckoCoin } from './types';
 import { ethers } from 'ethers';
 
@@ -25,6 +26,8 @@ function App() {
   const [activeCoin, setActiveCoin] = useState<CoinGeckoCoin | null>(null);
   const [transactionPreview, setTransactionPreview] = useState<TransactionPreview | null>(null);
   const [swapPreview, setSwapPreview] = useState<SwapPreview | null>(null);
+  const [cryptoPanicToken, setCryptoPanicToken] = useState<string>(() => localStorage.getItem('cryptopanic_token') || '');
+  const [manualPanelOverride, setManualPanelOverride] = useState<RightPanelView | null>(null);
   
   // Use ref to break circular dependency with useGroqChat
   const addSystemMessageRef = useRef<((content: string) => void) | null>(null);
@@ -37,6 +40,21 @@ function App() {
   const { history, saveTransaction } = useTransactionHistory();
   const { getSwapQuote, approveToken } = usePancakeSwap();
   const { allCoins, watchlistCoins, watchlistIds, loading: watchlistLoading, lastUpdated: watchlistLastUpdated, toggleWatchlist, isInWatchlist } = useWatchlist();
+  
+  const { 
+    coinGeckoNews: newsData, 
+    cryptoPanicNews: panicNewsData, 
+    fearGreedData, 
+    isLoading: newsLoading, 
+    error: newsError, 
+    lastUpdated: newsLastUpdated 
+  } = useNews(cryptoPanicToken);
+
+  // Helper for auto-switching panels that respects manual overrides
+  const setPanelSafe = useCallback((panel: RightPanelView) => {
+    if (manualPanelOverride) return;
+    setRightPanelView(panel);
+  }, [manualPanelOverride]);
 
   // Define action handler for the AI
   const handleAIAction = useCallback(async (action: string, params: Record<string, string>) => {
@@ -59,6 +77,7 @@ function App() {
           networkName: wallet.networkName || 'Unknown Network'
         });
         setRightPanelView('transaction');
+        setManualPanelOverride('transaction');
       }
     } else if (action === 'SWAP') {
       const { fromToken, toToken, amount } = params;
@@ -88,6 +107,7 @@ function App() {
             rawSwapData: { amountWei, estimatedOutputWei: estimatedOutputWei.toString() }
           });
           setRightPanelView('swap');
+          setManualPanelOverride('swap');
           addSystemMessageProxy(`✅ Quote received! You'll get approx **${parseFloat(estimatedOutput).toFixed(4)} ${toToken.toUpperCase()}**. Review and confirm on the right.`);
         } catch (err: any) {
           addSystemMessageProxy(`❌ Swap Error: ${err.message}`);
@@ -112,6 +132,7 @@ function App() {
         if (coin) {
           setActiveCoin(coin);
           setRightPanelView('coin-chart');
+          setManualPanelOverride('coin-chart');
           addSystemMessageProxy(`📈 Opening **${coin.name}** chart...`);
         } else {
           addSystemMessageProxy(`❌ Sorry, I couldn't find a chart for **${coinId}**.`);
@@ -120,11 +141,15 @@ function App() {
     } else if (action === 'NAVIGATE') {
       const { view } = params;
       if (view === 'watchlist') {
-        setRightPanelView('watchlist');
+        setPanelSafe('watchlist');
         addSystemMessageProxy(`📋 Opening your watchlist.`);
       }
+    } else if (action === 'SHOW_NEWS') {
+      setRightPanelView('news-sentiment');
+      setManualPanelOverride('news-sentiment'); // Hard override when showing news
+      addSystemMessageProxy(`📊 Opening Market News & Sentiment...`);
     }
-  }, [wallet.networkName, wallet.address, getSwapQuote, addSystemMessageProxy, toggleWatchlist, allCoins]);
+  }, [wallet.networkName, wallet.address, getSwapQuote, addSystemMessageProxy, toggleWatchlist, allCoins, manualPanelOverride, setPanelSafe]);
 
   const { messages, isLoading, sendMessage, addSystemMessage, clearMessages } = useGroqChat(apiKey, handleAIAction);
   
@@ -132,7 +157,7 @@ function App() {
     addSystemMessageRef.current = addSystemMessage;
   }, [addSystemMessage]);
 
-  const { prices, isLoading: pricesLoading } = useCryptoPrices(['bitcoin', 'ethereum', 'solana', 'cardano', 'chainlink', 'binancecoin', 'matic-network', 'avalanche-2', 'tether', 'usd-coin']);
+  const { prices, isLoading: pricesLoading } = useCryptoPrices(['bitcoin', 'ethereum', 'solana', 'cardano', 'chainlink', 'binancecoin', 'matic-network', 'avalanche-2', 'tether', 'usd-coin', 'ripple']);
   const { chartData, isLoading: chartLoading, coinName: chartCoinName } = useCoinChart(activeCoin?.id || null);
 
   // Handle sidebar feature click → preset message + panel update
@@ -141,30 +166,52 @@ function App() {
       setActiveFeature(feature);
       setActiveTab('agent');
 
+      const walletCtx = { 
+        address: wallet.address, 
+        holdings: wallet.holdings, 
+        contacts, 
+        history, 
+        watchlist: watchlistIds 
+      };
+      const sentimentCtx = { 
+        fearGreed: fearGreedData, 
+        news: newsData 
+      };
+
       // Update right panel based on feature
       if (feature === 'portfolio') {
         setRightPanelView('portfolio');
-        sendMessage(message, { address: wallet.address, holdings: wallet.holdings, contacts, history });
+        setManualPanelOverride('portfolio');
+        sendMessage(message, walletCtx, sentimentCtx);
       } else if (feature === 'wallet') {
         setRightPanelView('contacts');
+        setManualPanelOverride('contacts');
         addSystemMessage("Here are your saved contacts. You can add someone by saying 'add [name] [wallet address]'.");
       } else if (feature === 'watchlist') {
         setRightPanelView('watchlist');
-        sendMessage(message, { address: wallet.address, holdings: wallet.holdings, contacts, history, watchlist: watchlistIds });
+        setManualPanelOverride('watchlist');
+        sendMessage(message, walletCtx, sentimentCtx);
       } else if (feature === 'chart') {
         const btc = allCoins.find(c => c.symbol === 'btc') || allCoins[0];
         if (btc) setActiveCoin(btc);
         setRightPanelView('coin-chart');
-        sendMessage(message, { address: wallet.address, holdings: wallet.holdings, contacts, history, watchlist: watchlistIds });
+        setManualPanelOverride('coin-chart');
+        sendMessage(message, walletCtx, sentimentCtx);
       } else if (feature === 'journal') {
         setRightPanelView('history');
-        sendMessage(message, { address: wallet.address, holdings: wallet.holdings, contacts, history });
+        setManualPanelOverride('history');
+        sendMessage(message, walletCtx, sentimentCtx);
+      } else if (feature === 'news-sentiment') {
+        setRightPanelView('news-sentiment');
+        setManualPanelOverride('news-sentiment');
+        // Silent - Do not sendMessage
       } else {
         setRightPanelView('prices');
-        sendMessage(message, { address: wallet.address, holdings: wallet.holdings, contacts, history });
+        setManualPanelOverride('prices');
+        sendMessage(message, walletCtx, sentimentCtx);
       }
     },
-    [sendMessage, addSystemMessage, wallet.address, wallet.holdings, contacts, history, watchlistIds, allCoins]
+    [sendMessage, addSystemMessage, wallet.address, wallet.holdings, contacts, history, watchlistIds, allCoins, fearGreedData, newsData]
   );
 
   const handleConfirmTransaction = useCallback(async () => {
@@ -179,13 +226,36 @@ function App() {
       addSystemMessage(`⏳ Requesting signature for **${preview.amount} ${preview.coin}**...`);
       const provider = new ethers.BrowserProvider(window.ethereum);
       const signer = await provider.getSigner();
+      const network = await provider.getNetwork();
+      const chainId = Number(network.chainId);
       
-      const transaction = {
-        to: preview.address,
-        value: ethers.parseEther(preview.amount)
-      };
-
-      const response = await signer.sendTransaction(transaction);
+      let response;
+      const coinUpper = preview.coin.toUpperCase();
+      const isNative = ['BNB', 'ETH', 'MATIC', 'AVAX'].includes(coinUpper);
+      
+      if (isNative) {
+        response = await signer.sendTransaction({
+          to: preview.address,
+          value: ethers.parseEther(preview.amount)
+        });
+      } else {
+        // Token transfer logic
+        const chainTokens = TOKEN_ADDRESSES[chainId] || {};
+        const tokenAddr = chainTokens[coinUpper];
+        
+        if (!tokenAddr) throw new Error(`Contract address for ${coinUpper} not found on this network.`);
+        
+        const tokenContract = new ethers.Contract(tokenAddr, [
+          "function transfer(address to, uint256 amount) returns (bool)",
+          "function decimals() view returns (uint8)"
+        ], signer);
+        
+        const decimals = await tokenContract.decimals().catch(() => 18);
+        const amountWei = ethers.parseUnits(preview.amount, decimals);
+        
+        response = await tokenContract.transfer(preview.address, amountWei);
+      }
+      
       txHash = response.hash;
       
       addSystemMessageProxy(`📡 Transaction broadcasted! **Hash**: ${txHash.slice(0, 10)}... (Status: **Pending**)`);
@@ -250,10 +320,14 @@ function App() {
       const provider = new ethers.BrowserProvider(window.ethereum);
       const signer = await provider.getSigner();
 
-      // Check for ETH (native)
-      const isFromEth = swapPreview.fromToken === 'BNB'; 
-      const isToEth = swapPreview.toToken === 'BNB';
-
+      // Check for native BNB
+      const isFromEth = swapPreview.fromTokenAddress === BNB_TOKENS.BNB; 
+      const isToEth = swapPreview.toTokenAddress === BNB_TOKENS.BNB;
+      
+      const pFrom = isFromEth ? WBNB : swapPreview.fromTokenAddress;
+      const pTo = isToEth ? WBNB : swapPreview.toTokenAddress;
+      const path = [pFrom, pTo];
+      
       let tx: any;
       const PANCAKESWAP_ROUTER = "0x10ED43C718714eb63d5aA57B78B54704E256024E";
       const ROUTER_ABI = [
@@ -264,7 +338,6 @@ function App() {
 
       const router = new ethers.Contract(PANCAKESWAP_ROUTER, ROUTER_ABI, signer);
       const deadline = Math.floor(Date.now() / 1000) + 60 * 20; // 20 mins
-      const path = [swapPreview.fromTokenAddress, swapPreview.toTokenAddress];
       const amountIn = swapPreview.rawSwapData.amountWei;
       const minAmountOut = 0; // In production, use slippage
 
@@ -363,9 +436,12 @@ function App() {
         contacts, 
         history, 
         watchlist: watchlistIds 
+      }, {
+        fearGreed: fearGreedData,
+        news: newsData
       });
     },
-    [sendMessage, addContact, removeContact, contacts, wallet.address, wallet.holdings, history, watchlistIds]
+    [sendMessage, addContact, removeContact, contacts, wallet.address, wallet.holdings, history, watchlistIds, fearGreedData, newsData]
   );
 
   const handleConnectWallet = useCallback(() => {
@@ -376,12 +452,13 @@ function App() {
     }
   }, [wallet.isConnected, connectWallet]);
 
-  const handleSaveSettings = (newKey: string) => {
+  const handleSaveSettings = (newKey: string, newToken: string) => {
     setApiKey(newKey);
+    setCryptoPanicToken(newToken);
     localStorage.setItem('groq_api_key', newKey);
-    if (newKey) {
-      addSystemMessageProxy('✅ API Key saved! I am now ready to chat.');
-      addSystemMessageProxy('How can I help you with your crypto journey today?');
+    localStorage.setItem('cryptopanic_token', newToken);
+    if (newKey || newToken) {
+      addSystemMessageProxy('✅ Settings saved! I am now ready to chat and fetch news.');
     }
   };
 
@@ -393,6 +470,9 @@ function App() {
       contacts, 
       history, 
       watchlist: watchlistIds 
+    }, {
+      fearGreed: fearGreedData,
+      news: newsData
     });
   };
 
@@ -469,6 +549,13 @@ function App() {
           }}
           onBackToWatchlist={() => setRightPanelView('watchlist')}
           activeCoin={activeCoin}
+          newsData={newsData}
+          panicNewsData={panicNewsData}
+          fearGreedData={fearGreedData}
+          newsLoading={newsLoading}
+          newsError={newsError}
+          newsLastUpdated={newsLastUpdated}
+          cryptoPanicToken={cryptoPanicToken}
         />
       </div>
 
@@ -476,6 +563,7 @@ function App() {
       {settingsOpen && (
         <SettingsModal
           apiKey={apiKey}
+          cryptoPanicToken={cryptoPanicToken}
           onSave={handleSaveSettings}
           onClose={() => setSettingsOpen(false)}
         />

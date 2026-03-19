@@ -40,10 +40,10 @@ const FEATURES: {
     message: 'Analyze the current Bitcoin chart for me. What patterns do you see and what is the likely next move?',
   },
   {
-    id: 'morning',
-    icon: '🗞️',
-    label: 'Morning Brief',
-    message: 'Give me today\'s crypto morning brief. Top market movers, key news, and what I should be watching today.',
+    id: 'news-sentiment',
+    icon: '📊',
+    label: 'News & Sentiment',
+    message: 'What is the current market sentiment? Show me the Fear & Greed index and the latest top news.',
   },
   {
     id: 'debate',

@@ -33,7 +33,7 @@ export const TOKEN_ADDRESSES: Record<number, Record<string, string>> = {
   }
 };
 
-const SUPPORTED_TOKENS_META = [
+export const SUPPORTED_TOKENS_META = [
   { symbol: 'USDT', name: 'Tether', color: '#26a17b' },
   { symbol: 'LINK', name: 'Chainlink', color: '#2a5ada' },
   { symbol: 'USDC', name: 'USD Coin', color: '#2775ca' },

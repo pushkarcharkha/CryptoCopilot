@@ -10,7 +10,8 @@ import {
   Pie,
   Cell,
 } from 'recharts';
-import type { CryptoPrice, ChartDataPoint, RightPanelView, WalletState, TransactionPreview, SwapPreview, AppTransaction, CoinGeckoCoin } from '../types';
+import type { CryptoPrice, ChartDataPoint, RightPanelView, WalletState, TransactionPreview, SwapPreview, AppTransaction, CoinGeckoCoin, NewsArticle, FearGreedData } from '../types';
+import NewsSentimentPanel from './NewsSentimentPanel';
 
 interface RightPanelProps {
   view: RightPanelView;
@@ -38,6 +39,13 @@ interface RightPanelProps {
   onCoinClick?: (coin: CoinGeckoCoin) => void;
   onBackToWatchlist?: () => void;
   activeCoin?: CoinGeckoCoin | null;
+  newsData?: NewsArticle[];
+  panicNewsData?: NewsArticle[];
+  fearGreedData?: FearGreedData[];
+  newsLoading?: boolean;
+  newsError?: string | null;
+  newsLastUpdated?: number | null;
+  cryptoPanicToken?: string;
 }
 
 function formatPrice(n: number | null | undefined) {
@@ -165,6 +173,13 @@ const RightPanel: React.FC<RightPanelProps> = ({
   onCoinClick,
   onBackToWatchlist,
   activeCoin,
+  newsData = [],
+  panicNewsData = [],
+  fearGreedData = [],
+  newsLoading = false,
+  newsError = null,
+  newsLastUpdated = null,
+  cryptoPanicToken = '',
 }) => {
   const [historyFilter, setHistoryFilter] = React.useState<'all' | 'send' | 'swap' | 'week' | 'month'>('all');
   const [watchlistTab, setWatchlistTab] = React.useState<'my' | 'all'>('my');
@@ -244,6 +259,7 @@ const RightPanel: React.FC<RightPanelProps> = ({
           {view === 'watchlist' && 'Watchlist'}
           {view === 'contacts' && 'Address Book'}
           {view === 'history' && 'Trade Journal'}
+          {view === 'news-sentiment' && 'News & Sentiment'}
           {view === 'coin-chart' && (
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               <button 
@@ -797,7 +813,6 @@ const RightPanel: React.FC<RightPanelProps> = ({
                           color: isInWatchlist?.(coin.id) ? '#ef4444' : '#00d4ff',
                           padding: '4px 8px',
                           fontSize: '10px',
-                          fontWeight: 700,
                           cursor: 'pointer'
                         }}
                       >
@@ -806,14 +821,21 @@ const RightPanel: React.FC<RightPanelProps> = ({
                     </div>
                   ))
               )}
-              
-              {watchlistTab === 'my' && watchlistCoins.length === 0 && !watchlistLoading && (
-                <div style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--text-muted)', fontSize: '13px' }}>
-                  No coins added yet. Browse All Coins to add some.
-                </div>
-              )}
             </div>
           </div>
+        )}
+
+        {/* ===== NEWS & SENTIMENT VIEW ===== */}
+        {view === 'news-sentiment' && (
+          <NewsSentimentPanel
+            fearGreed={fearGreedData}
+            coinGeckoNews={newsData}
+            cryptoPanicNews={panicNewsData}
+            isLoading={newsLoading}
+            error={newsError}
+            lastUpdated={newsLastUpdated}
+            cryptoPanicToken={cryptoPanicToken}
+          />
         )}
 
         {/* ===== CONTACTS VIEW ===== */}
