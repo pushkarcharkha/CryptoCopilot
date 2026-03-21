@@ -4,6 +4,7 @@ import { useCryptoPrices } from '../hooks/useCrypto';
 
 interface SignalFeedProps {
     onSignalClick: (signal: TraderSignal) => void;
+    onAnalyzeClick: (signal: TraderSignal) => void;
 }
 
 const MOCK_TRADERS: TraderSignal[] = [
@@ -11,11 +12,11 @@ const MOCK_TRADERS: TraderSignal[] = [
         id: '1',
         name: 'AlphaWolf',
         avatar: '🐺',
-        signal: '🚀 Long SOL at $142 — TP1: $165, TP2: $195, SL: $128. On-chain volume spike possible',
+        signal: '🚀 Long SOL',
         coin: 'SOL',
         direction: 'Long',
-        entry: 142,
-        tp: 165,
+        entry: 92,
+        tp: 105,
         winRate: 74,
         totalSignals: 312,
         verified: true,
@@ -24,10 +25,10 @@ const MOCK_TRADERS: TraderSignal[] = [
         id: '2',
         name: 'CryptoSage',
         avatar: '🧙',
-        signal: '📈 Long ETH at $2,180 — TP: $2,650, SL: $1,980. ETH/BTC ratio breakout.',
+        signal: '📈 Long ETH ',
         coin: 'ETH',
         direction: 'Long',
-        entry: 2180,
+        entry: 2160,
         tp: 2650,
         winRate: 68,
         totalSignals: 487,
@@ -37,11 +38,11 @@ const MOCK_TRADERS: TraderSignal[] = [
         id: '3',
         name: 'WhaleTracks',
         avatar: '🐋',
-        signal: '⚡ Short BTC at $94,500 — TP: $88,000, SL: $97,200. Bearish divergence on 4H.',
+        signal: '⚡ Short BTC ',
         coin: 'BTC',
         direction: 'Short',
-        entry: 94500,
-        tp: 88000,
+        entry: 70500,
+        tp: 68000,
         winRate: 61,
         totalSignals: 195,
         verified: true,
@@ -50,10 +51,10 @@ const MOCK_TRADERS: TraderSignal[] = [
         id: '4',
         name: 'DeFiDragon',
         avatar: '🐉',
-        signal: '🔥 Long LINK at $14.2 — TP: $18.5. Chainlink oracle expansion catalyst.',
+        signal: '🔥 Long LINK',
         coin: 'LINK',
         direction: 'Long',
-        entry: 14.2,
+        entry: 9.5,
         tp: 18.5,
         winRate: 71,
         totalSignals: 256,
@@ -63,10 +64,10 @@ const MOCK_TRADERS: TraderSignal[] = [
         id: '5',
         name: 'MoonRider',
         avatar: '🚀',
-        signal: '🟢 Long ADA at $0.89 — TP: $1.10, SL: $0.75. Stochastic crossing-up on 4H.',
+        signal: '🟢 Long ADA ',
         coin: 'ADA',
         direction: 'Long',
-        entry: 0.89,
+        entry: 0.38,
         tp: 1.1,
         winRate: 66,
         totalSignals: 354,
@@ -76,11 +77,11 @@ const MOCK_TRADERS: TraderSignal[] = [
         id: '6',
         name: 'VoltaEdge',
         avatar: '⚡',
-        signal: '🔴 Short AVAX at $38.5 — TP: $33.0, SL: $41.2. Momentum divergence on 1H.',
+        signal: '🔴 Short AVAX ',
         coin: 'AVAX',
         direction: 'Short',
-        entry: 38.5,
-        tp: 33.0,
+        entry: 10.2,
+        tp: 6.8,
         winRate: 70,
         totalSignals: 280,
         verified: false,
@@ -89,7 +90,7 @@ const MOCK_TRADERS: TraderSignal[] = [
         id: '7',
         name: 'ChainMaster',
         avatar: '🔗',
-        signal: '🟢 Long LINK at $13.8 — TP: $17.5, SL: $12.1. On-chain volume spike detected.',
+        signal: '🟢 Long LINK ',
         coin: 'LINK',
         direction: 'Long',
         entry: 13.8,
@@ -102,7 +103,7 @@ const MOCK_TRADERS: TraderSignal[] = [
         id: '8',
         name: 'FuturePulse',
         avatar: '📈',
-        signal: '⚠️ Short DOT at $5.75 — TP: $4.90, SL: $6.20. Breakdown of 200 EMA confirmed.',
+        signal: '⚠️ Short DOT ',
         coin: 'DOT',
         direction: 'Short',
         entry: 5.75,
@@ -124,7 +125,7 @@ const SYMBOL_TO_ID: Record<string, string> = {
     BNB: 'binancecoin',
 };
 
-const SignalFeed: React.FC<SignalFeedProps> = ({ onSignalClick }) => {
+const SignalFeed: React.FC<SignalFeedProps> = ({ onSignalClick, onAnalyzeClick }) => {
     const { prices, isLoading } = useCryptoPrices(Object.values(SYMBOL_TO_ID));
 
     const enrichedSignals = MOCK_TRADERS.map((trader) => {
@@ -291,6 +292,10 @@ const SignalFeed: React.FC<SignalFeedProps> = ({ onSignalClick }) => {
                                     color: '#cbd5e1',
                                     lineHeight: 1.5,
                                     marginBottom: '14px',
+                                    display : "flex",
+                                    alignItems : "center",
+                                    justifyContent : "center",
+                                    textAlign : "center",
                                 }}
                             >
                                 {trader.signal}
@@ -325,7 +330,7 @@ const SignalFeed: React.FC<SignalFeedProps> = ({ onSignalClick }) => {
                             <button
                                 onClick={(e) => {
                                     e.stopPropagation();
-                                    onSignalClick(trader);
+                                    onAnalyzeClick(trader);
                                 }}
                                 style={{
                                     width: '100%',

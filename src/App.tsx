@@ -5,6 +5,7 @@ import ChatPanel from './components/ChatPanel';
 import RightPanel from './components/RightPanel';
 import SignalFeed from './components/SignalFeed';
 import SettingsModal from './components/SettingsModal';
+import ExchangeModal from './components/ExchangeModal';
 import { useGroqChat } from './hooks/useGroqChat';
 import { useWallet, TOKEN_ADDRESSES } from './hooks/useWallet';
 import { useCryptoPrices } from './hooks/useCrypto';
@@ -31,6 +32,7 @@ function App() {
     const [swapPreview, setSwapPreview] = useState<SwapPreview | null>(null);
     const [watchlistCoin, setWatchlistCoin] = useState<CoinGeckoCoin | null>(null);
     const [manualPanelOverride, setManualPanelOverride] = useState<RightPanelView | null>(null);
+    const [exchangeOpen, setExchangeOpen] = useState(false);
 
     const [showScanline, setShowScanline] = useState(true);
     const [showWalletAnim, setShowWalletAnim] = useState(false);
@@ -569,6 +571,10 @@ Using ONLY these exact numbers give a professional trading analysis. Include:
         }
     }, [wallet.isConnected, connectWallet]);
 
+    const handleOpenExchange = useCallback(() => {
+        setExchangeOpen(true);
+    }, []);
+
     const handleSaveSettings = (newKey: string) => {
         setApiKey(newKey);
         localStorage.setItem('groq_api_key', newKey);
@@ -594,6 +600,31 @@ Using ONLY these exact numbers give a professional trading analysis. Include:
         }, activeFeature);
     };
 
+    const handleSignalAnalyzeOnly = (signal: TraderSignal) => {
+        setActiveTab('agent');
+        sendMessage(
+            `Analyze only this signal and provide insights: ${signal.coin} ${signal.direction} from ${signal.name}. Do not open or suggest executing any paper futures trade action. Just return analysis with entry zone, stop loss, target, risk, and confidence.`,
+            {
+                address: wallet.address,
+                holdings: wallet.holdings,
+                contacts,
+                history,
+                watchlist: watchlistIds
+            },
+            {
+                fearGreed: fearGreedData,
+                news: newsData
+            },
+            {
+                balance: futuresBalance,
+                positions: futuresPositions
+            },
+            activeFeature,
+            null,
+            { allowActions: false }
+        );
+    };
+
     return (
         <div
             style={{
@@ -613,6 +644,7 @@ Using ONLY these exact numbers give a professional trading analysis. Include:
                 formatAddress={formatAddress}
                 activeTab={activeTab}
                 onTabChange={setActiveTab}
+                onOpenExchange={handleOpenExchange}
             />
 
             {/* Main Layout */}
@@ -635,7 +667,7 @@ Using ONLY these exact numbers give a professional trading analysis. Include:
                         onClearChat={clearMessages}
                     />
                 ) : (
-                    <SignalFeed onSignalClick={handleSignalClick} />
+                    <SignalFeed onSignalClick={handleSignalClick} onAnalyzeClick={handleSignalAnalyzeOnly} />
                 )}
 
                 {/* Right Panel */}
@@ -687,6 +719,13 @@ Using ONLY these exact numbers give a professional trading analysis. Include:
                 <ChartModal
                     coin={watchlistCoin}
                     onClose={() => setWatchlistCoin(null)}
+                />
+            )}
+
+            {exchangeOpen && (
+                <ExchangeModal
+                    prices={prices}
+                    onClose={() => setExchangeOpen(false)}
                 />
             )}
 
