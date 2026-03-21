@@ -51,7 +51,10 @@ export function useGroqChat(apiKey: string, onActionDetected?: (action: string, 
         trendline: number | null;
         buySignals: number;
         sellSignals: number;
-      } | null
+      } | null,
+      options?: {
+        allowActions?: boolean;
+      }
     ) => {
       if (!content.trim() || isLoading) return;
 
@@ -183,8 +186,9 @@ Virtual Balance: $${futuresContext?.balance || '1000'}`;
         const data = await res.json();
         let aiContent = data.choices[0].message.content;
 
+        const allowActions = options?.allowActions !== false;
         const actionMatch = aiContent.match(/\[\[ACTION:(.*?)\]\]/);
-        if (actionMatch && onActionDetectedRef.current) {
+        if (allowActions && actionMatch && onActionDetectedRef.current) {
           const parts = actionMatch[1].split('|');
           const type = parts[0];
           const params: Record<string, string> = {};
@@ -193,6 +197,8 @@ Virtual Balance: $${futuresContext?.balance || '1000'}`;
             if (k && v) params[k.trim()] = v.trim();
           });
           onActionDetectedRef.current(type, params);
+          aiContent = aiContent.replace(/\[\[ACTION:.*?\]\]/g, '').trim();
+        } else if (actionMatch) {
           aiContent = aiContent.replace(/\[\[ACTION:.*?\]\]/g, '').trim();
         }
 

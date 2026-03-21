@@ -1,10 +1,12 @@
-import { Rocket, Bot, Radio, Wallet } from 'lucide-react';
+import { Bot, Radio, Wallet, ArrowRightLeft } from 'lucide-react';
 import type { WalletState, CryptoPrice } from '../types';
 import { AnimatedNumber } from './AnimatedNumber';
+import appLogo from '../assets/cryptoguru.png';
 
 interface TopBarProps {
   activeTab: 'agent' | 'signals';
   onTabChange: (tab: 'agent' | 'signals') => void;
+  onOpenExchange: () => void;
   wallet: WalletState;
   prices: CryptoPrice[];
   onConnectWallet: () => void;
@@ -14,6 +16,7 @@ interface TopBarProps {
 const TopBar: React.FC<TopBarProps> = ({
   activeTab,
   onTabChange,
+  onOpenExchange,
   wallet,
   prices,
   onConnectWallet,
@@ -40,39 +43,17 @@ const TopBar: React.FC<TopBarProps> = ({
       }}
     >
       {/* Left: Logo */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-        <div
+      <div style={{ display: 'flex', alignItems: 'center' }}>
+        <img
+          src={appLogo}
+          alt="Cryptoguru"
           style={{
-            width: '32px',
-            height: '32px',
-            borderRadius: '8px',
-            background: 'linear-gradient(135deg, #00d4ff, #8b5cf6)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            fontSize: '16px',
+            height: '150px',
+            width: 'auto',
+            objectFit: 'contain',
+            display: 'block',
           }}
-        >
-          <Rocket size={18} color="#fff" />
-        </div>
-        <div>
-          <div
-            style={{
-              fontFamily: 'Space Grotesk, sans-serif',
-              fontWeight: 700,
-              fontSize: '18px',
-              background: 'linear-gradient(90deg, #00d4ff, #8b5cf6)',
-              WebkitBackgroundClip: 'text',
-              WebkitTextFillColor: 'transparent',
-              lineHeight: 1.2,
-            }}
-          >
-            Cryptoguru AI
-          </div>
-          <div style={{ fontSize: '10px', color: 'var(--text-muted)', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
-            Bloomberg × ChatGPT Terminal
-          </div>
-        </div>
+        />
       </div>
 
       {/* Scrolling ticker */}
@@ -104,6 +85,28 @@ const TopBar: React.FC<TopBarProps> = ({
 
       {/* Center: Tabs */}
       <div style={{ display: 'flex', gap: '4px', background: 'rgba(0,0,0,0.3)', borderRadius: '10px', padding: '4px' }}>
+        <button
+          id="tab-exchange"
+          onClick={onOpenExchange}
+          style={{
+            padding: '6px 18px',
+            borderRadius: '8px',
+            border: 'none',
+            cursor: 'pointer',
+            fontFamily: 'Inter, sans-serif',
+            fontWeight: 600,
+            fontSize: '13px',
+            transition: 'all 0.2s ease',
+            background: 'transparent',
+            color: 'var(--text-secondary)',
+            boxShadow: 'none',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px'
+          }}
+        >
+          <ArrowRightLeft size={16} /> Exchange
+        </button>
         <button
           id="tab-agent"
           onClick={() => onTabChange('agent')}
